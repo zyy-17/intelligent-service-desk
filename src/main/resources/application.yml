@@ -1,0 +1,54 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+  compression:
+    enabled: true
+
+spring:
+  application:
+    name: intelligent-service-desk
+  datasource:
+    url: jdbc:mysql://localhost:3306/intelligent_service_desk?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true&rewriteBatchedStatements=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 2
+      connection-timeout: 10000
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
+      schema-locations: classpath:db/schema.sql
+      continue-on-error: false
+  mvc:
+    throw-exception-if-no-handler-found: false
+  web:
+    resources:
+      add-mappings: true
+      static-locations: classpath:/static/
+
+# ===== 业务配置 =====
+app:
+  jwt:
+    # 生产环境请通过环境变量 JWT_SECRET 覆盖
+    secret: ${JWT_SECRET:intelligent-service-desk-default-secret-key-please-change-in-production}
+    expire-seconds: 86400
+  ai:
+    # 云端大模型（OpenAI 兼容接口）：DeepSeek / 通义百炼-compatible / Kimi / 智谱 / OpenAI 均可
+    # 只需修改 base-url、api-key、model 三个值，或直接用环境变量注入
+    enabled: ${AI_ENABLED:true}
+    base-url: ${AI_BASE_URL:https://api.deepseek.com/v1}
+    api-key: ${AI_API_KEY:}
+    model: ${AI_MODEL:deepseek-chat}
+    timeout-seconds: 45
+    temperature: 0.3
+
+logging:
+  level:
+    root: INFO
+    com.zyyqq: INFO

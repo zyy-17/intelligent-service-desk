@@ -1,0 +1,221 @@
+package com.zyyqq.desk.service;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import com.zyyqq.desk.config.AppProperties;
+import com.zyyqq.desk.entity.KnowledgeArticle;
+import com.zyyqq.desk.repository.AiTaskLogRepository;
+import com.zyyqq.desk.repository.KnowledgeArticleRepository;
+import com.zyyqq.desk.entity.AiTaskLog;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.*;
+
+/**
+ * 智能问答：优先调用云端大模型（OpenAI 兼容接口）做知识库增强生成（RAG），
+ * 未配置密钥或调用失败时，自动降级为知识库关键词检索。
+ */
+@Slf4j
+@Service
+public class AiService {
+
+    private final AppProperties props;
+    private final KnowledgeArticleRepository articleRepository;
+    private final AiTaskLogRepository aiLogRepository;
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+
+    public AiService(AppProperties props, KnowledgeArticleRepository articleRepository,
+                     AiTaskLogRepository aiLogRepository, JdbcTemplate jdbc) {
+        this.props = props;
+        this.articleRepository = articleRepository;
+        this.aiLogRepository = aiLogRepository;
+        this.jdbc = jdbc;
+    }
+
+    public Map<String, Object> chat(String question) {
+        String requestId = UUID.randomUUID().toString().replace("-", "");
+        long start = System.currentTimeMillis();
+        if (question == null || question.isBlank()) {
+            return Map.of("answer", "请输入您的问题", "source", "无", "fallback", true);
+        }
+
+        // 1. 知识库检索（先精确子串，再分词宽匹配）
+        List<KnowledgeArticle> hits = articleRepository.search(question.trim(), 5);
+        if (hits.isEmpty()) {
+            hits = fuzzySearch(question.trim());
+        }
+
+        // 2. 尝试调用云端模型
+        AppProperties.Ai ai = props.getAi();
+        if (ai.isEnabled() && ai.getApiKey() != null && !ai.getApiKey().isBlank()
+                && ai.getBaseUrl() != null && !ai.getBaseUrl().isBlank()) {
+            try {
+                String answer = callCloudModel(question, hits, ai);
+                String source = hits.isEmpty() ? "模型生成" : hits.get(0).getTitle();
+                long duration = System.currentTimeMillis() - start;
+                saveLog(requestId, "QA", "SUCCESS", (int) duration, question, answer.length(), ai.getModel(), source, null);
+                return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", false);
+            } catch (Exception e) {
+                long duration = System.currentTimeMillis() - start;
+                saveLog(requestId, "QA", "FAILED", (int) duration, question, 0, ai.getModel(), null, e.getMessage());
+                log.warn("云端模型调用失败，降级为知识库检索：{}", e.getMessage());
+            }
+        }
+
+        // 3. 降级：知识库检索
+        long duration = System.currentTimeMillis() - start;
+        String answer = buildFallbackAnswer(question, hits);
+        String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
+        saveLog(requestId, "QA", "FALLBACK", (int) duration, question, answer.length(), "knowledge-base", source, null);
+        return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
+    }
+
+    private List<KnowledgeArticle> fuzzySearch(String question) {
+        // 将问题切分为 2 字短语，逐个短语做 LIKE 匹配，取命中次数最多的文章
+        java.util.Map<Long, Integer> score = new java.util.LinkedHashMap<>();
+        java.util.Set<String> grams = new java.util.LinkedHashSet<>();
+        String q = question.replaceAll("[\\s，。！？、,.!?：:；;]", "");
+        for (int i = 0; i + 1 < q.length(); i++) {
+            grams.add(q.substring(i, i + 2));
+        }
+        if (grams.isEmpty()) {
+            return java.util.List.of();
+        }
+        for (String g : grams) {
+            List<KnowledgeArticle> matched = articleRepository.search(g, 10);
+            for (KnowledgeArticle a : matched) {
+                score.merge(a.getId(), 1, Integer::sum);
+            }
+        }
+        if (score.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<Long> ids = score.entrySet().stream()
+                .filter(e -> e.getValue() >= 2)  // 至少 2 个短语命中才认为相关
+                .sorted((e1, e2) -> e2.getValue() - e1.getValue())
+                .limit(5)
+                .map(java.util.Map.Entry::getKey)
+                .toList();
+        if (ids.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<KnowledgeArticle> result = new java.util.ArrayList<>();
+        for (Long id : ids) {
+            articleRepository.findById(id).ifPresent(result::add);
+        }
+        return result;
+    }
+
+    private String callCloudModel(String question, List<KnowledgeArticle> hits, AppProperties.Ai ai) throws Exception {
+        // 组装受控上下文
+        StringBuilder ctx = new StringBuilder();
+        for (KnowledgeArticle a : hits) {
+            String body = a.getBody() == null ? "" : a.getBody().replaceAll("(?s)#{1,6}\\s*|\\*|>`?|`", "").trim();
+            if (body.length() > 400) body = body.substring(0, 400);
+            ctx.append("【").append(a.getTitle()).append("】").append(body).append("\n");
+        }
+        String system = "你是「智能客服与工单管理平台」的客服助手，请用简洁、专业的中文回答用户问题。" +
+                "优先依据下面提供的知识库内容回答；如果知识库内容不足，可以结合常识回答，但不要编造具体数字或承诺。";
+        String user = "知识库参考：\n" + (ctx.length() == 0 ? "（无相关知识）" : ctx) + "\n\n用户问题：" + question;
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("model", ai.getModel());
+        payload.put("temperature", ai.getTemperature());
+        payload.put("messages", List.of(
+                Map.of("role", "system", "content", system),
+                Map.of("role", "user", "content", user)
+        ));
+
+        String url = ai.getBaseUrl().replaceAll("/+$", "") + "/chat/completions";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(ai.getTimeoutSeconds()))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + ai.getApiKey())
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .build();
+        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+        if (resp.statusCode() != 200) {
+            throw new IllegalStateException("模型接口返回 " + resp.statusCode() + ": " + truncate(resp.body(), 200));
+        }
+        JsonNode root = objectMapper.readTree(resp.body());
+        JsonNode choices = root.path("choices");
+        if (!choices.isArray() || choices.isEmpty()) {
+            throw new IllegalStateException("模型返回无结果");
+        }
+        String answer = choices.get(0).path("message").path("content").asText();
+        if (answer == null || answer.isBlank()) {
+            throw new IllegalStateException("模型返回空内容");
+        }
+        return answer.trim();
+    }
+
+    private String buildFallbackAnswer(String question, List<KnowledgeArticle> hits) {
+        if (hits.isEmpty()) {
+            return "抱歉，未在知识库中找到与「" + question + "」直接相关的答案。\n\n建议您：\n1. 换个关键词重新描述问题；\n2. 提交工单，由人工客服为您处理；\n3. 查看知识库热门文章获取帮助。";
+        }
+        KnowledgeArticle top = hits.get(0);
+        String body = top.getBody() == null ? "" : top.getBody().replaceAll("(?s)#{1,6}\\s*|\\*|>`?|`", "").trim();
+        StringBuilder sb = new StringBuilder();
+        sb.append("根据知识库文章《").append(top.getTitle()).append("》，为您解答：\n\n");
+        sb.append(body.length() > 800 ? body.substring(0, 800) + "…" : body);
+        if (hits.size() > 1) {
+            sb.append("\n\n更多相关内容：");
+            for (int i = 1; i < Math.min(hits.size(), 4); i++) {
+                sb.append("\n· ").append(hits.get(i).getTitle());
+            }
+        }
+        sb.append("\n\n（当前为知识库检索结果，配置云端模型后可获得更智能的回答。）");
+        return sb.toString();
+    }
+
+    private List<Map<String, Object>> brief(List<KnowledgeArticle> hits) {
+        List<Map<String, Object>> r = new ArrayList<>();
+        for (KnowledgeArticle a : hits) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", a.getId());
+            m.put("title", a.getTitle());
+            m.put("categoryName", a.getCategoryName());
+            r.add(m);
+        }
+        return r;
+    }
+
+    private void saveLog(String requestId, String taskType, String status, int duration, String question,
+                         Integer answerLength, String model, String source, String error) {
+        try {
+            AiTaskLog log = new AiTaskLog();
+            log.setRequestId(requestId);
+            log.setTaskType(taskType);
+            log.setStatus(status);
+            log.setDurationMs(duration);
+            log.setQuestion(truncate(question, 500));
+            log.setAnswerLength(answerLength);
+            log.setModel(model);
+            log.setSource(source);
+            log.setErrorSummary(error == null ? null : truncate(error, 500));
+            log.setCreatedAt(LocalDateTime.now());
+            aiLogRepository.save(log);
+        } catch (Exception e) {
+            // 记录失败不影响主流程
+            log.warn("AI 日志写入失败", e);
+        }
+    }
+
+    private String truncate(String s, int n) {
+        if (s == null) return null;
+        return s.length() <= n ? s : s.substring(0, n);
+    }
+}
