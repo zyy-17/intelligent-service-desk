@@ -67,6 +67,8 @@ app:
     # 独立 FastAPI AI 服务地址（见 ai-service/ 目录，需单独启动）
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
     timeout-seconds: 50
+    # AI 助手名称（用于欢迎语；与 ai-service/.env 的 AI_ASSISTANT_NAME 保持一致）
+    assistant-name: ${AI_ASSISTANT_NAME:小智}
 
   # ===== Redis 业务参数 =====
   redis:

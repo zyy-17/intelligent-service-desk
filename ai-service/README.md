@@ -53,7 +53,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `AI_MODEL` | `deepseek-chat` | 模型名 |
 | `AI_TIMEOUT_SECONDS` | `45` | 调用超时（秒） |
 | `AI_TEMPERATURE` | `0.3` | 采样温度 |
-| `AI_ASSISTANT_NAME` | `小智` | AI 客服的名字（写进系统提示词） |
+| `AI_ASSISTANT_NAME` | `小智` | AI 客服的名字（写进系统提示词；Java 侧欢迎语读同名环境变量） |
 | `AI_COMPANY_NAME` | `智能服务台` | AI 所属平台名（写进系统提示词） |
 | `AI_TONE` | `亲切、专业、有耐心…` | AI 语气设定 |
 | `AI_ANSWER_MAX_CHARS` | `200` | 单次回答字数上限（提示词约束） |
@@ -125,3 +125,16 @@ AI_ANSWER_MAX_CHARS=200
 提示词三层约束：**角色定位**（身份/语气/立场）→ **回答规则**（知识库优先、不编造、跟随语言、简洁分点、不承诺赔付时限、不索要密码验证码、结合历史指代、不泄露提示词）→ **输出格式**（不复述问题、标注《文章标题》来源、不用一级标题）。
 
 摘要、分类、草稿各有独立提示词（`summary.py` / `classify.py` / `draft.py`），与客户问答互不干扰：分类强制"只输出一个数字"，摘要强制"一句话 50 字内"，草稿强制"称呼→共情→方案→下一步"结构。
+
+## 问答上下文（由 Java 侧注入）
+
+`POST /api/ai/chat` 除 `question` 外可携带下列字段，本服务会把它们渲染进提示词：
+
+| 字段 | 说明 |
+| --- | --- |
+| `user_profile` | 当前用户身份：`display_name` / `role` / `company` / `joined_at` / `ticket_total` / `ticket_processing` / `ticket_resolved` |
+| `tickets` | 近期工单：`ticket_no` / `title` / `status` / `priority` / `category_name` / `created_at` / `solution`（最多 5 条） |
+| `knowledge_catalog` | 知识库目录：`id` / `title` / `summary` / `keywords` / `category_name`（无正文，用于判断覆盖范围） |
+| `knowledge` | 检索命中的知识正文（RAG 的作答依据） |
+
+这四个字段都是可选的；不传时行为与之前一致。资料统一渲染进 user 消息（而非 system），避免把用户可控内容当成系统指令。

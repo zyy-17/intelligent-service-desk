@@ -27,6 +27,7 @@ public class AiService {
     private final AppProperties props;
     private final KnowledgeArticleRepository articleRepository;
     private final AiTaskLogRepository aiLogRepository;
+    private final AiContextService contextService;
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -34,11 +35,17 @@ public class AiService {
             .build();
 
     public AiService(AppProperties props, KnowledgeArticleRepository articleRepository,
-                     AiTaskLogRepository aiLogRepository, JdbcTemplate jdbc) {
+                     AiTaskLogRepository aiLogRepository, AiContextService contextService, JdbcTemplate jdbc) {
         this.props = props;
         this.articleRepository = articleRepository;
         this.aiLogRepository = aiLogRepository;
+        this.contextService = contextService;
         this.jdbc = jdbc;
+    }
+
+    /** 生成个性化欢迎语（突出 AI 名字，结合用户身份与工单概况） */
+    public Map<String, Object> greeting(long uid, String role, String displayName) {
+        return contextService.greeting(uid, role, displayName);
     }
 
     /** 非流式问答：检索知识库、调用 AI 服务，失败降级本地并记录日志 */
@@ -46,6 +53,7 @@ public class AiService {
         String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
         String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
         Object userId = body.get("user_id");
+        String userRole = body.get("user_role") == null ? null : String.valueOf(body.get("user_role"));
         String requestId = UUID.randomUUID().toString().replace("-", "");
         long start = System.currentTimeMillis();
         if (question == null || question.isBlank()) {
@@ -62,7 +70,7 @@ public class AiService {
         AppProperties.AiService aiService = props.getAiService();
         if (aiService.getBaseUrl() != null && !aiService.getBaseUrl().isBlank()) {
             try {
-                Map<String, Object> result = callFastApi(question, sessionId, userId, hits, aiService);
+                Map<String, Object> result = callFastApi(question, sessionId, userId, userRole, hits, aiService);
                 long duration = System.currentTimeMillis() - start;
                 saveLog(requestId, "QA", "SUCCESS", (int) duration, question,
                         String.valueOf(result.get("answer")).length(),
@@ -90,8 +98,8 @@ public class AiService {
         return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
     }
 
-    /** 调用 FastAPI 的 /api/ai/chat 接口，携带本地检索知识作为上下文 */
-    private Map<String, Object> callFastApi(String question, String sessionId, Object userId,
+    /** 调用 FastAPI 的 /api/ai/chat 接口，携带本地检索知识、用户画像、工单与知识库目录 */
+    private Map<String, Object> callFastApi(String question, String sessionId, Object userId, String userRole,
                                             List<KnowledgeArticle> hits,
                                             AppProperties.AiService aiService) throws Exception {
         Map<String, Object> payload = new HashMap<>();
@@ -103,6 +111,8 @@ public class AiService {
         if (userId != null) {
             payload.put("user_id", userId);
         }
+        // 注入用户身份、近期工单与知识库全量目录，供模型做个性化回答
+        contextService.applyContext(payload, userId, userRole);
 
         String url = aiService.getBaseUrl().replaceAll("/+$", "") + "/api/ai/chat";
         HttpRequest req = HttpRequest.newBuilder()
@@ -286,6 +296,7 @@ public class AiService {
         String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
         String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
         Object userId = body.get("user_id");
+        String userRole = body.get("user_role") == null ? null : String.valueOf(body.get("user_role"));
         String requestId = UUID.randomUUID().toString().replace("-", "");
         long start = System.currentTimeMillis();
 
@@ -325,6 +336,8 @@ public class AiService {
         if (userId != null) {
             payload.put("user_id", userId);
         }
+        // 注入用户身份、近期工单与知识库全量目录（流式线程内读取，故角色由 body 传入）
+        contextService.applyContext(payload, userId, userRole);
 
         String url = aiService.getBaseUrl().replaceAll("/+$", "") + "/api/ai/chat/stream";
         HttpRequest req = HttpRequest.newBuilder()

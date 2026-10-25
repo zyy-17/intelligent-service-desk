@@ -25,8 +25,8 @@
       <div class="chat-header">
         <img class="bot-avatar" :src="botAvatar" alt="AI" />
         <div>
-          <div class="bot-name">智能客服助手</div>
-          <div class="bot-desc">基于知识库的智能问答，随时为您服务</div>
+          <div class="bot-name">小智 · AI 智能助手</div>
+          <div class="bot-desc">已知您的身份与工单，结合知识库为您解答</div>
         </div>
       </div>
 
@@ -78,8 +78,11 @@ const myColor = auth.user?.avatarColor || '#6366f1'
 
 const sessions = ref([])
 const currentSessionId = ref('')
+// 欢迎语由后端按用户身份生成（含 AI 名字小智与工单概况），拿不到时用默认文案
+const DEFAULT_WELCOME = '您好！我是 AI 智能助手小智 😊\n账号登录、账单支付、产品使用等问题都可以问我，也可以让我帮您提交工单。'
+const welcome = ref(DEFAULT_WELCOME)
 const messages = ref([
-  { role: 'assistant', content: '您好！我是智能客服助手，可以为您解答平台使用、账号、账单等常见问题。请输入您的问题。' }
+  { role: 'assistant', content: DEFAULT_WELCOME }
 ])
 const input = ref('')
 const loading = ref(false)
@@ -103,10 +106,24 @@ async function loadSessions() {
   } catch (e) { /* 拦截器已提示 */ }
 }
 
+// 拉取个性化欢迎语：后端结合当前用户身份与工单概况生成，突出 AI 名字
+async function loadGreeting() {
+  try {
+    const data = await api.get('/ai/greeting')
+    if (data && data.text) {
+      welcome.value = data.text
+      // 仅在尚未开始对话时替换首条欢迎消息
+      if (messages.value.length === 1 && messages.value[0].role === 'assistant') {
+        messages.value = [{ role: 'assistant', content: data.text }]
+      }
+    }
+  } catch (e) { /* 使用默认欢迎语 */ }
+}
+
 function newSession() {
   currentSessionId.value = ''
   messages.value = [
-    { role: 'assistant', content: '您好！我是智能客服助手，可以为您解答平台使用、账号、账单等常见问题。请输入您的问题。' }
+    { role: 'assistant', content: welcome.value }
   ]
   scrollBottom()
 }
@@ -122,7 +139,7 @@ async function loadSession(s) {
     }))
     messages.value = history.length
       ? history
-      : [{ role: 'assistant', content: '您好！我是智能客服助手，请问有什么可以帮您？' }]
+      : [{ role: 'assistant', content: welcome.value }]
     scrollBottom()
   } catch (e) { /* 拦截器已提示 */ }
 }
@@ -260,6 +277,7 @@ async function scrollBottom() {
 onMounted(() => {
   scrollBottom()
   loadSessions()
+  loadGreeting()
   // 首页 Hero 搜索 / 常见问题点击会带上 ?q= 关键字，进入后自动提问
   const preset = route.query.q
   if (preset && String(preset).trim()) {

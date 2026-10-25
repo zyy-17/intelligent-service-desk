@@ -233,7 +233,7 @@
           <div class="ai-body">
             <div class="ai-bot">
               <img class="bot-avatar" :src="botAvatar" alt="AI" />
-              <div class="bot-bubble">您好，我是智能客服助手，可以帮您解答常见问题。</div>
+              <div class="bot-bubble">您好，我是 AI 智能助手小智，可以帮您查工单、解答常见问题。</div>
             </div>
             <el-input v-model="aiQuestion" placeholder="输入您的问题..." size="large" @keyup.enter="askAi">
               <template #append>
@@ -269,7 +269,7 @@
           <div class="ai-body">
             <div class="ai-bot">
               <img class="bot-avatar" :src="botAvatar" alt="AI" />
-              <div class="bot-bubble">您好，我是智能客服助手，可以帮您解答常见问题。</div>
+              <div class="bot-bubble">您好，我是 AI 智能助手小智，可以帮您查工单、解答常见问题。</div>
             </div>
             <el-input v-model="aiQuestion" placeholder="输入您的问题..." size="large" @keyup.enter="askAi">
               <template #append>

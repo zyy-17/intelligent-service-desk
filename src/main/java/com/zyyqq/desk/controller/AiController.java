@@ -22,15 +22,26 @@ public class AiController {
     /** 非流式问答 */
     @PostMapping("/chat")
     public ApiResponse<Map<String, Object>> chat(@RequestBody Map<String, Object> body) {
-        // 附带当前登录用户，供 AI 服务做多轮会话归属
-        body.put("user_id", AuthContext.require().id());
+        // 附带当前登录用户与角色，供 AI 服务读取用户身份、工单与会话归属
+        AuthContext.UserInfo u = AuthContext.require();
+        body.put("user_id", u.id());
+        body.put("user_role", u.role());
         return ApiResponse.ok(aiService.chat(body));
+    }
+
+    /** 个性化欢迎语：突出 AI 名字，结合当前用户身份与工单概况 */
+    @GetMapping("/greeting")
+    public ApiResponse<Map<String, Object>> greeting() {
+        AuthContext.UserInfo u = AuthContext.require();
+        return ApiResponse.ok(aiService.greeting(u.id(), u.role(), u.displayName()));
     }
 
     /** 流式问答：SSE 逐段返回回答，含思考时间与回答耗时 */
     @PostMapping("/chat/stream")
     public SseEmitter chatStream(@RequestBody Map<String, Object> body) {
-        body.put("user_id", AuthContext.require().id());
+        AuthContext.UserInfo u = AuthContext.require();
+        body.put("user_id", u.id());
+        body.put("user_role", u.role());
         SseEmitter emitter = new SseEmitter(120_000L);
         new Thread(() -> {
             try {

@@ -50,5 +50,7 @@ public class AppProperties {
         /** FastAPI AI 服务地址 */
         private String baseUrl = "http://localhost:8000";
         private int timeoutSeconds = 50;
+        /** AI 助手名称（欢迎语使用，需与 ai-service/.env 的 AI_ASSISTANT_NAME 保持一致） */
+        private String assistantName = "小智";
     }
 }
