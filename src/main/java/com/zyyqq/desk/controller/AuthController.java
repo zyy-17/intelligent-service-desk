@@ -4,6 +4,7 @@ import com.zyyqq.desk.common.ApiResponse;
 import com.zyyqq.desk.security.AllowAnonymous;
 import com.zyyqq.desk.service.AuthService;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -27,7 +28,12 @@ public class AuthController {
     @PostMapping("/register")
     public ApiResponse<Map<String, Object>> register(@RequestBody Map<String, String> body) {
         return ApiResponse.ok(authService.register(body.get("username"), body.get("password"),
-                body.get("displayName"), body.get("email")));
+                body.get("displayName"), body.get("email"), body.get("role")));
+    }
+
+    @PostMapping(value = "/avatar", consumes = "multipart/form-data")
+    public ApiResponse<Map<String, Object>> uploadAvatar(@RequestParam("file") MultipartFile file) {
+        return ApiResponse.ok(authService.updateAvatar(file));
     }
 
     @GetMapping("/profile")

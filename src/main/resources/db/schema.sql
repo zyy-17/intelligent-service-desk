@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     company       VARCHAR(128)          DEFAULT NULL COMMENT '客户公司',
     department    VARCHAR(64)           DEFAULT NULL COMMENT '部门',
     avatar_color  VARCHAR(16)           DEFAULT NULL COMMENT '头像底色',
+    avatar_url    VARCHAR(255)          DEFAULT NULL COMMENT '头像文件地址',
     status        TINYINT      NOT NULL DEFAULT 1 COMMENT '1 正常 0 禁用',
     last_login_at DATETIME              DEFAULT NULL COMMENT '最后登录时间',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,

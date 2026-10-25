@@ -2,10 +2,12 @@ package com.zyyqq.desk.entity;
 
 import lombok.Data;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
 @Data
+@Table("sys_user")
 public class User {
     @Id
     private Long id;
@@ -18,6 +20,7 @@ public class User {
     private String company;
     private String department;
     private String avatarColor;
+    private String avatarUrl;
     private Integer status;
     private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;

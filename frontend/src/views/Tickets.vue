@@ -158,6 +158,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
@@ -301,6 +302,9 @@ async function doReply() {
 }
 
 onMounted(() => {
+  // 支持从全局搜索跳转过来并带入关键字
+  const kw = useRoute().query.keyword
+  if (kw) query.keyword = String(kw)
   load()
   loadMeta()
 })

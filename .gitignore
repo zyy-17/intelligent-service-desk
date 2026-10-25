@@ -24,6 +24,9 @@ ai-service/.env
 .env.local
 application-local.yml
 
+### 本地上传文件（用户头像等）###
+uploads/
+
 ### STS ###
 .apt_generated
 .classpath
