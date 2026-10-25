@@ -69,6 +69,9 @@
 
         <!-- 操作区 -->
         <div class="action-bar">
+          <el-button v-if="isStaff" size="small" :icon="MagicStick" :loading="summarizing" @click="doSummarize">
+            AI 摘要
+          </el-button>
           <template v-if="isStaff && detail.ticket.status === 'PENDING'">
             <el-select v-model="assignTarget" placeholder="选择处理人" size="small" style="width: 140px">
               <el-option v-for="a in agents" :key="a.id" :label="a.name" :value="a.id" />
@@ -85,10 +88,19 @@
             <el-button type="success" size="small" @click="doConfirm(true)">确认已解决</el-button>
             <el-button type="warning" size="small" @click="doConfirm(false)">未解决</el-button>
           </template>
+          <template v-if="isCustomer && ['PENDING','ASSIGNED','PROCESSING'].includes(detail.ticket.status)">
+            <el-button type="warning" size="small" :icon="Bell" @click="doUrge">催办</el-button>
+          </template>
           <template v-if="isStaff && detail.ticket.status === 'RESOLVED'">
             <el-button type="success" size="small" @click="doClose">关闭工单</el-button>
           </template>
         </div>
+
+        <!-- AI 摘要 -->
+        <el-alert v-if="aiSummary" type="info" :closable="false" class="ai-summary">
+          <template #title><span class="ai-summary-title">AI 摘要</span></template>
+          {{ aiSummary }}
+        </el-alert>
 
         <!-- 消息记录 -->
         <div class="msg-title">沟通记录</div>
@@ -111,7 +123,10 @@
             <el-radio-button value="INTERNAL">内部备注</el-radio-button>
           </el-radio-group>
           <el-input v-model="replyContent" type="textarea" :rows="3" placeholder="输入回复内容..." />
-          <el-button type="primary" style="margin-top: 8px" @click="doReply">发送</el-button>
+          <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end;">
+            <el-button v-if="isStaff" size="small" :icon="MagicStick" :loading="drafting" @click="doDraft">AI 草稿</el-button>
+            <el-button type="primary" @click="doReply">发送</el-button>
+          </div>
         </div>
       </div>
     </el-drawer>
@@ -160,7 +175,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus } from '@element-plus/icons-vue'
+import { Search, Plus, MagicStick, Bell } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
 import api from '../api'
 
@@ -199,6 +214,11 @@ const createVisible = ref(false)
 const createForm = reactive({ title: '', categoryId: null, priority: 'MEDIUM', description: '' })
 const resolveVisible = ref(false)
 const solution = ref('')
+
+// AI 摘要 / 草稿
+const aiSummary = ref('')
+const summarizing = ref(false)
+const drafting = ref(false)
 
 function fmtTime(t) { return t ? t.replace('T', ' ').substring(0, 19) : '' }
 
@@ -296,6 +316,22 @@ async function doClose() {
   load()
 }
 
+async function doUrge() {
+  let value = ''
+  try {
+    const r = await ElMessageBox.prompt('可填写催办原因（可选）', '催办工单', {
+      confirmButtonText: '催办', cancelButtonText: '取消', inputPlaceholder: '请输入催办原因'
+    })
+    value = r.value || ''
+  } catch (e) {
+    return // 用户取消
+  }
+  await api.post(`/tickets/${detail.value.ticket.id}/urge`, { reason: value })
+  ElMessage.success('已催办，客服将尽快处理')
+  detail.value = await api.get(`/tickets/${detail.value.ticket.id}`)
+  load()
+}
+
 async function doReply() {
   if (!replyContent.value.trim()) { ElMessage.warning('请输入回复内容'); return }
   await api.post(`/tickets/${detail.value.ticket.id}/messages`, {
@@ -303,6 +339,33 @@ async function doReply() {
   })
   replyContent.value = ''
   detail.value = await api.get(`/tickets/${detail.value.ticket.id}`)
+}
+
+async function doSummarize() {
+  const t = detail.value.ticket
+  summarizing.value = true
+  aiSummary.value = ''
+  try {
+    const r = await api.post('/ai/summarize', { title: t.title, description: t.description })
+    aiSummary.value = r.summary || '（未能生成摘要）'
+  } catch (e) {
+    ElMessage.warning('AI 摘要生成失败，请确认 AI 服务已启动')
+  } finally {
+    summarizing.value = false
+  }
+}
+
+async function doDraft() {
+  const t = detail.value.ticket
+  drafting.value = true
+  try {
+    const r = await api.post('/ai/draft', { title: t.title, description: t.description })
+    replyContent.value = r.draft || replyContent.value
+  } catch (e) {
+    ElMessage.warning('AI 草稿生成失败，请确认 AI 服务已启动')
+  } finally {
+    drafting.value = false
+  }
 }
 
 onMounted(() => {
@@ -333,4 +396,6 @@ onMounted(() => {
 .msg-time { color: var(--text-muted); font-size: 11px; margin-left: auto; }
 .msg-content { margin-top: 6px; font-size: 13px; white-space: pre-wrap; }
 .reply-box { margin-top: 8px; }
+.ai-summary { margin-top: 4px; }
+.ai-summary-title { font-weight: 600; margin-right: 4px; }
 </style>

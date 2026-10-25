@@ -24,6 +24,24 @@ public class AiController {
         return ApiResponse.ok(aiService.chat(body));
     }
 
+    /** 工单摘要 */
+    @PostMapping("/summarize")
+    public ApiResponse<Object> summarize(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/summarize", body));
+    }
+
+    /** 分类推荐 */
+    @PostMapping("/classify")
+    public ApiResponse<Object> classify(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/classify", body));
+    }
+
+    /** 回复草稿 */
+    @PostMapping("/draft")
+    public ApiResponse<Object> draft(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/draft", body));
+    }
+
     /** 新建会话 */
     @PostMapping("/sessions")
     public ApiResponse<Object> createSession(@RequestBody Map<String, Object> body) {

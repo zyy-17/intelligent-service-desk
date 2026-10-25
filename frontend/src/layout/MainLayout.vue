@@ -95,6 +95,7 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item command="profile" :icon="User">个人中心</el-dropdown-item>
                 <el-dropdown-item command="switch" :icon="SwitchButton">切换账号</el-dropdown-item>
                 <el-dropdown-item command="logout" :icon="CircleClose" divided>退出登录</el-dropdown-item>
               </el-dropdown-menu>
@@ -124,7 +125,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, ArrowDown, SwitchButton, CircleClose } from '@element-plus/icons-vue'
+import { Search, ArrowDown, SwitchButton, CircleClose, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
 import api from '../api'
 
@@ -132,15 +133,8 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 
-const menu = [
-  { path: '/dashboard', label: '工作台', icon: 'Odometer' },
-  { path: '/tickets', label: '工单管理', icon: 'Tickets' },
-  { path: '/customers', label: '客户管理', icon: 'User' },
-  { path: '/knowledge', label: '知识库', icon: 'Collection' },
-  { path: '/chat', label: '智能问答', icon: 'ChatDotRound' },
-  { path: '/stats', label: '数据统计', icon: 'DataAnalysis' },
-  { path: '/system', label: '系统管理', icon: 'Setting' }
-]
+// 菜单由后端按角色下发，前端直接渲染（无需维护角色映射）
+const menu = computed(() => auth.menus || [])
 
 const isActive = (path) => route.path.startsWith(path)
 
@@ -201,7 +195,9 @@ function onKeydown(e) {
 
 /* ===== 用户菜单 ===== */
 function onUserCommand(command) {
-  if (command === 'switch') {
+  if (command === 'profile') {
+    router.push('/profile')
+  } else if (command === 'switch') {
     ElMessageBox.confirm('切换账号将退出当前登录，是否继续？', '切换账号', {
       confirmButtonText: '切换账号',
       cancelButtonText: '取消',

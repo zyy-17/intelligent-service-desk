@@ -24,7 +24,7 @@
       </div>
     </div>
 
-    <div class="grid-2">
+    <div class="grid-2" v-if="!isPersonal">
       <!-- 工单趋势 -->
       <div class="panel-card chart-panel">
         <div class="panel-head">
@@ -46,7 +46,29 @@
       </div>
     </div>
 
-    <div class="grid-3">
+    <!-- 个人视角：我的工单列表 -->
+    <div class="panel-card list-panel" v-if="isPersonal">
+      <div class="panel-head">
+        <span class="panel-title">{{ isCustomer ? '我的工单' : '我的待办' }}</span>
+        <router-link to="/tickets" class="more">查看全部 →</router-link>
+      </div>
+      <div class="ticket-list">
+        <div v-for="t in personalList" :key="t.id" class="ticket-item">
+          <div class="ticket-main">
+            <div class="ticket-no">{{ t.ticket_no }}</div>
+            <div class="ticket-title" :title="t.title">{{ t.title }}</div>
+          </div>
+          <div class="ticket-meta">
+            <el-tag :type="priorityType(t.priority)" size="small" effect="light">{{ priorityLabel(t.priority) }}</el-tag>
+            <el-tag :type="statusType(t.status)" size="small" effect="plain">{{ statusLabel(t.status) }}</el-tag>
+            <span class="ticket-time">{{ shortTime(t.created_at) }}</span>
+          </div>
+        </div>
+        <div v-if="personalList.length === 0" class="empty-tip">暂无工单</div>
+      </div>
+    </div>
+
+    <div class="grid-3" v-if="!isPersonal">
       <!-- 最新工单 -->
       <div class="panel-card list-panel">
         <div class="panel-head">
@@ -104,8 +126,44 @@
       </div>
     </div>
 
+    <!-- 个人视角：热门知识 + AI 助手（自助服务） -->
+    <div class="grid-2" v-if="isPersonal">
+      <div class="panel-card list-panel">
+        <div class="panel-head">
+          <span class="panel-title">热门知识</span>
+          <router-link to="/chat" class="more">去问答 →</router-link>
+        </div>
+        <div class="kb-list">
+          <div v-for="(a, i) in hotArticles" :key="a.id" class="kb-item">
+            <span class="kb-rank" :class="'r' + (i + 1)">{{ i + 1 }}</span>
+            <div class="kb-main">
+              <div class="kb-title">{{ a.title }}</div>
+              <div class="kb-meta">{{ a.categoryName }} · {{ a.viewCount }} 次浏览</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel-card ai-panel">
+        <div class="panel-head">
+          <span class="panel-title">AI 智能助手</span>
+        </div>
+        <div class="ai-body">
+          <div class="ai-bot">
+            <img class="bot-avatar" :src="botAvatar" alt="AI" />
+            <div class="bot-bubble">您好，我是智能客服助手，可以帮您解答常见问题。</div>
+          </div>
+          <el-input v-model="aiQuestion" placeholder="输入您的问题..." size="large" @keyup.enter="askAi">
+            <template #append>
+              <el-button :icon="Promotion" @click="askAi" />
+            </template>
+          </el-input>
+          <div v-if="aiAnswer" class="ai-answer">{{ aiAnswer }}</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 服务概况 -->
-    <div class="panel-card overview-panel">
+    <div class="panel-card overview-panel" v-if="!isPersonal">
       <div class="panel-head">
         <span class="panel-title">服务概况</span>
       </div>
@@ -162,19 +220,56 @@ const aiAnswer = ref('')
 
 const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 
-const kpiCards = computed(() => [
-  { label: '工单总数', value: overview.value.totalTickets || 0, icon: 'Tickets', bg: '#eef2ff', color: '#6366f1' },
-  { label: '待处理工单', value: overview.value.pendingTickets || 0, icon: 'Clock', bg: '#fff7ed', color: '#f59e0b' },
-  { label: '处理中工单', value: overview.value.processingTickets || 0, icon: 'Loading', bg: '#eff6ff', color: '#3b82f6' },
-  { label: '已解决工单', value: overview.value.resolvedTickets || 0, icon: 'CircleCheck', bg: '#f0fdf4', color: '#22c55e' },
-  { label: '今日新增', value: overview.value.todayNew || 0, icon: 'TrendCharts', bg: '#fdf2f8', color: '#ec4899' }
-])
+// 角色差异化：客户/客服展示个人概览，主管/管理员展示全站
+const isCustomer = computed(() => auth.role === 'CUSTOMER')
+const isAgent = computed(() => auth.role === 'AGENT')
+const isPersonal = computed(() => isCustomer.value || isAgent.value)
+const myData = ref({})
+
+const kpiCards = computed(() => {
+  if (isCustomer.value) {
+    const d = myData.value
+    return [
+      { label: '我的工单', value: d.total || 0, icon: 'Tickets', bg: '#eef2ff', color: '#6366f1' },
+      { label: '处理中', value: d.processing || 0, icon: 'Loading', bg: '#eff6ff', color: '#3b82f6' },
+      { label: '待确认', value: d.waiting || 0, icon: 'Clock', bg: '#fff7ed', color: '#f59e0b' },
+      { label: '已解决', value: d.resolved || 0, icon: 'CircleCheck', bg: '#f0fdf4', color: '#22c55e' }
+    ]
+  }
+  if (isAgent.value) {
+    const d = myData.value
+    return [
+      { label: '待接单', value: d.assigned || 0, icon: 'Clock', bg: '#fff7ed', color: '#f59e0b' },
+      { label: '处理中', value: d.processing || 0, icon: 'Loading', bg: '#eff6ff', color: '#3b82f6' },
+      { label: '待客户确认', value: d.waiting || 0, icon: 'Tickets', bg: '#fdf2f8', color: '#ec4899' },
+      { label: '已解决', value: d.resolved || 0, icon: 'CircleCheck', bg: '#f0fdf4', color: '#22c55e' }
+    ]
+  }
+  return [
+    { label: '工单总数', value: overview.value.totalTickets || 0, icon: 'Tickets', bg: '#eef2ff', color: '#6366f1' },
+    { label: '待处理工单', value: overview.value.pendingTickets || 0, icon: 'Clock', bg: '#fff7ed', color: '#f59e0b' },
+    { label: '处理中工单', value: overview.value.processingTickets || 0, icon: 'Loading', bg: '#eff6ff', color: '#3b82f6' },
+    { label: '已解决工单', value: overview.value.resolvedTickets || 0, icon: 'CircleCheck', bg: '#f0fdf4', color: '#22c55e' },
+    { label: '今日新增', value: overview.value.todayNew || 0, icon: 'TrendCharts', bg: '#fdf2f8', color: '#ec4899' }
+  ]
+})
+
+const personalList = computed(() => {
+  if (isCustomer.value) return myData.value.recent || []
+  if (isAgent.value) return myData.value.todo || []
+  return []
+})
 
 const priorityMap = { URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' }
 const priorityTypeMap = { URGENT: 'danger', HIGH: 'warning', MEDIUM: 'primary', LOW: 'info' }
 const priorityLabel = p => priorityMap[p] || p
 const priorityType = p => priorityTypeMap[p] || 'info'
 const shortTime = t => (t ? t.replace('T', ' ').substring(5, 16) : '')
+
+const statusMap = { PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '处理中', WAITING: '待确认', RESOLVED: '已解决', CLOSED: '已关闭' }
+const statusTypeMap = { PENDING: 'info', ASSIGNED: 'warning', PROCESSING: 'primary', WAITING: 'warning', RESOLVED: 'success', CLOSED: 'info' }
+const statusLabel = s => statusMap[s] || s
+const statusType = s => statusTypeMap[s] || 'info'
 
 async function loadOverview() {
   overview.value = await api.get('/stats/overview')
@@ -183,6 +278,12 @@ async function loadOverview() {
   await nextTick()
   renderTrend()
   renderCategory()
+}
+
+async function loadMyOverview() {
+  myData.value = await api.get('/stats/my-overview')
+  // 个人角色也可加载热门知识作为自助服务入口
+  hotArticles.value = await api.get('/knowledge/hot', { params: { limit: 5 } })
 }
 
 async function loadTrend() {
@@ -237,7 +338,11 @@ function handleResize() {
 }
 
 onMounted(() => {
-  loadOverview()
+  if (isPersonal.value) {
+    loadMyOverview()
+  } else {
+    loadOverview()
+  }
   window.addEventListener('resize', handleResize)
 })
 onBeforeUnmount(() => {
@@ -328,6 +433,7 @@ onBeforeUnmount(() => {
 }
 .ticket-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .ticket-time { font-size: 11px; color: var(--text-muted); }
+.empty-tip { text-align: center; color: var(--text-muted); font-size: 13px; padding: 24px 0; }
 
 .kb-list { display: flex; flex-direction: column; }
 .kb-item { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #f3f4f6; }

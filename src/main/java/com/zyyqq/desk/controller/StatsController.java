@@ -25,6 +25,11 @@ public class StatsController {
         return ApiResponse.ok(statsService.overview());
     }
 
+    @GetMapping("/my-overview")
+    public ApiResponse<Map<String, Object>> myOverview() {
+        return ApiResponse.ok(statsService.myOverview());
+    }
+
     @GetMapping("/trend")
     public ApiResponse<List<Map<String, Object>>> trend(@RequestParam(defaultValue = "7") int days) {
         return ApiResponse.ok(statsService.trend(days));

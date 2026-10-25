@@ -45,4 +45,10 @@ public class AuthController {
     public ApiResponse<Map<String, Object>> updateProfile(@RequestBody Map<String, String> body) {
         return ApiResponse.ok(authService.updateProfile(body.get("displayName"), body.get("email"), body.get("phone")));
     }
+
+    @PutMapping("/password")
+    public ApiResponse<Void> changePassword(@RequestBody Map<String, String> body) {
+        authService.changePassword(body.get("oldPassword"), body.get("newPassword"));
+        return ApiResponse.ok();
+    }
 }

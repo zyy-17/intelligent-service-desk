@@ -103,6 +103,12 @@ public class TicketController {
         return ApiResponse.ok();
     }
 
+    @PostMapping("/{id}/urge")
+    public ApiResponse<Void> urge(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        ticketService.urge(id, body.get("reason"));
+        return ApiResponse.ok();
+    }
+
     @GetMapping("/meta/agents")
     public ApiResponse<List<Map<String, Object>>> agents() {
         return ApiResponse.ok(ticketService.agents());

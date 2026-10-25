@@ -4,6 +4,8 @@ import com.zyyqq.desk.config.AppProperties;
 import com.zyyqq.desk.repository.StatsRepository;
 import com.zyyqq.desk.repository.TicketRepository;
 import com.zyyqq.desk.repository.UserRepository;
+import com.zyyqq.desk.security.AuthContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -19,14 +21,17 @@ public class StatsService {
     private final UserRepository userRepository;
     private final RedisSupport redisSupport;
     private final AppProperties props;
+    private final JdbcTemplate jdbc;
 
     public StatsService(StatsRepository statsRepository, TicketRepository ticketRepository,
-                        UserRepository userRepository, RedisSupport redisSupport, AppProperties props) {
+                        UserRepository userRepository, RedisSupport redisSupport, AppProperties props,
+                        JdbcTemplate jdbc) {
         this.statsRepository = statsRepository;
         this.ticketRepository = ticketRepository;
         this.userRepository = userRepository;
         this.redisSupport = redisSupport;
         this.props = props;
+        this.jdbc = jdbc;
     }
 
     public Map<String, Object> overview() {
@@ -69,6 +74,61 @@ public class StatsService {
 
     public List<Map<String, Object>> trend(int days) {
         return statsRepository.trend(Math.min(Math.max(days, 1), 90));
+    }
+
+    /**
+     * 我的概览：按当前登录用户角色返回差异化首页数据。
+     * - 客户：我提交的工单分状态统计 + 最新工单
+     * - 客服：分配给我 / 待处理 / 待我确认的工单
+     * - 主管/管理员：走全站 overview
+     */
+    public Map<String, Object> myOverview() {
+        AuthContext.UserInfo u = AuthContext.require();
+        if ("CUSTOMER".equals(u.role())) {
+            return myCustomerOverview(u.id());
+        }
+        if ("AGENT".equals(u.role())) {
+            return myAgentOverview(u.id());
+        }
+        // 主管/管理员看全站
+        return overview();
+    }
+
+    private Map<String, Object> myCustomerOverview(long uid) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("role", "CUSTOMER");
+        data.put("total", jdbc.queryForObject("SELECT COUNT(*) FROM ticket WHERE customer_id = ?", Long.class, uid));
+        data.put("processing", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE customer_id = ? AND status IN ('PENDING','ASSIGNED','PROCESSING')", Long.class, uid));
+        data.put("waiting", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE customer_id = ? AND status = 'WAITING'", Long.class, uid));
+        data.put("resolved", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE customer_id = ? AND status IN ('RESOLVED','CLOSED')", Long.class, uid));
+        // 最新工单
+        data.put("recent", jdbc.queryForList(
+                "SELECT id, ticket_no, title, priority, status, created_at FROM ticket " +
+                "WHERE customer_id = ? ORDER BY created_at DESC LIMIT 6", uid));
+        return data;
+    }
+
+    private Map<String, Object> myAgentOverview(long uid) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("role", "AGENT");
+        data.put("assigned", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status = 'ASSIGNED'", Long.class, uid));
+        data.put("processing", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status = 'PROCESSING'", Long.class, uid));
+        data.put("waiting", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status = 'WAITING'", Long.class, uid));
+        data.put("resolved", jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status IN ('RESOLVED','CLOSED')", Long.class, uid));
+        // 我的待办工单
+        data.put("todo", jdbc.queryForList(
+                "SELECT t.id, t.ticket_no, t.title, t.priority, t.status, t.created_at, cu.display_name AS customer_name " +
+                "FROM ticket t LEFT JOIN sys_user cu ON cu.id = t.customer_id " +
+                "WHERE t.assignee_id = ? AND t.status IN ('ASSIGNED','PROCESSING','WAITING') " +
+                "ORDER BY t.created_at DESC LIMIT 6", uid));
+        return data;
     }
 
     private long countOverdue() {

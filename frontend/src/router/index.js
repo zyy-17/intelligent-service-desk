@@ -19,7 +19,8 @@ const routes = [
       { path: 'knowledge', name: 'knowledge', component: () => import('../views/Knowledge.vue'), meta: { title: '知识库' } },
       { path: 'chat', name: 'chat', component: () => import('../views/Chat.vue'), meta: { title: '智能问答' } },
       { path: 'stats', name: 'stats', component: () => import('../views/Stats.vue'), meta: { title: '数据统计' } },
-      { path: 'system', name: 'system', component: () => import('../views/System.vue'), meta: { title: '系统管理' } }
+      { path: 'system', name: 'system', component: () => import('../views/System.vue'), meta: { title: '系统管理' } },
+      { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue'), meta: { title: '个人中心' } }
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
@@ -39,6 +40,14 @@ router.beforeEach((to, from, next) => {
   if (!auth.isLoggedIn) {
     next('/login')
     return
+  }
+  // 角色权限守卫：菜单由后端按角色下发，手输越权路径时拦截（个人中心所有角色可用）
+  if (to.name !== 'profile' && to.path !== '/') {
+    const allowed = auth.menuPaths || []
+    if (allowed.length && !allowed.includes(to.path)) {
+      next('/dashboard')
+      return
+    }
   }
   next()
 })

@@ -23,14 +23,16 @@ public class AuthService {
     private final JdbcTemplate jdbc;
     private final RedisSupport redisSupport;
     private final AppProperties props;
+    private final MenuService menuService;
 
     public AuthService(UserRepository userRepository, JwtUtil jwtUtil, JdbcTemplate jdbc,
-                       RedisSupport redisSupport, AppProperties props) {
+                       RedisSupport redisSupport, AppProperties props, MenuService menuService) {
         this.userRepository = userRepository;
         this.jwtUtil = jwtUtil;
         this.jdbc = jdbc;
         this.redisSupport = redisSupport;
         this.props = props;
+        this.menuService = menuService;
     }
 
     public Map<String, Object> login(String username, String password) {
@@ -56,6 +58,7 @@ public class AuthService {
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
         data.put("user", toMap(user));
+        data.put("menus", menuService.menusFor(user.getRole()));
         return data;
     }
 
@@ -91,6 +94,7 @@ public class AuthService {
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
         data.put("user", toMap(saved));
+        data.put("menus", menuService.menusFor(saved.getRole()));
         return data;
     }
 
@@ -105,6 +109,21 @@ public class AuthService {
         jdbc.update("UPDATE sys_user SET display_name = COALESCE(?, display_name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?",
                 displayName, email, phone, uid);
         return profile();
+    }
+
+    /**
+     * 修改密码：校验原密码，新密码至少 6 位。
+     */
+    public void changePassword(String oldPassword, String newPassword) {
+        long uid = com.zyyqq.desk.security.AuthContext.require().id();
+        if (newPassword == null || newPassword.length() < 6) {
+            throw new BizException("新密码至少 6 位");
+        }
+        User user = userRepository.findById(uid).orElseThrow(() -> BizException.notFound("用户不存在"));
+        if (oldPassword == null || !PasswordUtil.verify(oldPassword, user.getPasswordHash())) {
+            throw new BizException("原密码错误");
+        }
+        jdbc.update("UPDATE sys_user SET password_hash = ? WHERE id = ?", PasswordUtil.hash(newPassword), uid);
     }
 
     public static Map<String, Object> toMap(User u) {

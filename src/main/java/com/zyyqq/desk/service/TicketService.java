@@ -244,6 +244,25 @@ public class TicketService {
         historyRepository.save(history(ticketId, u.id(), "RATE", null, String.valueOf(rating), "客户评价"));
     }
 
+    @Transactional
+    public void urge(Long ticketId, String reason) {
+        AuthContext.UserInfo u = AuthContext.require();
+        Ticket t = requireTicket(ticketId);
+        // 只有工单创建者且工单未到终态时可催办
+        if (!"CUSTOMER".equals(u.role()) || !t.getCustomerId().equals(u.id())) {
+            throw BizException.forbidden("只有工单创建者可催办");
+        }
+        if ("RESOLVED".equals(t.getStatus()) || "CLOSED".equals(t.getStatus())) {
+            throw new BizException("工单已结束，无需催办");
+        }
+        historyRepository.save(history(ticketId, u.id(), "URGE", null, t.getStatus(),
+                "客户催办" + (reason == null || reason.isBlank() ? "" : "：" + reason)));
+        // 通知处理人（未分配时通知所有客服/主管）
+        if (t.getAssigneeId() != null) {
+            addNotification(t.getAssigneeId(), "工单催办", "您有工单被客户催办，请尽快处理", ticketId);
+        }
+    }
+
     public List<Map<String, Object>> agents() {
         return jdbc.queryForList("SELECT id, display_name AS name, department, avatar_color FROM sys_user WHERE role='AGENT' AND status=1 ORDER BY id");
     }
