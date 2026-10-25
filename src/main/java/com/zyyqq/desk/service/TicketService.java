@@ -38,12 +38,18 @@ public class TicketService {
         this.jdbc = jdbc;
     }
 
-    /** 分页查询工单（支持状态与关键字过滤） */
+    /** 分页查询工单（支持状态与关键字过滤；客户角色仅能查到本人提交的工单） */
     public PageResult<Map<String, Object>> list(int page, int pageSize, String status, String keyword) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
         StringBuilder where = new StringBuilder(" WHERE 1=1 ");
         List<Object> args = new java.util.ArrayList<>();
+        // 资源级权限：客户只能看自己的工单，避免越权浏览全站数据
+        AuthContext.UserInfo me = AuthContext.require();
+        if ("CUSTOMER".equals(me.role())) {
+            where.append(" AND t.customer_id = ? ");
+            args.add(me.id());
+        }
         if (status != null && !status.isBlank()) {
             where.append(" AND t.status = ? ");
             args.add(status);

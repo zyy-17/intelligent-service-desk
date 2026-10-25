@@ -62,6 +62,7 @@
 
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Promotion, Plus, Delete, ChatDotRound } from '@element-plus/icons-vue'
 import botAvatar from '../assets/ai-bot-avatar.png'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -70,6 +71,8 @@ import api from '../api'
 import { renderMarkdown } from '../utils/markdown'
 
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
 const meName = auth.displayName || '我'
 const myColor = auth.user?.avatarColor || '#6366f1'
 
@@ -257,6 +260,12 @@ async function scrollBottom() {
 onMounted(() => {
   scrollBottom()
   loadSessions()
+  // 首页 Hero 搜索 / 常见问题点击会带上 ?q= 关键字，进入后自动提问
+  const preset = route.query.q
+  if (preset && String(preset).trim()) {
+    router.replace({ path: '/chat' })
+    send(String(preset).trim())
+  }
 })
 </script>
 

@@ -134,11 +134,17 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    ├─ 知识库            检索参考
    └─ 智能问答          AI 辅助回复
 
-👤 客户 CUSTOMER
-   ├─ 工作台            我的工单概览
-   ├─ 工单管理          提交工单、查看进度、确认、评价
-   └─ 智能问答          自助服务
+👤 客户 CUSTOMER（客户端独立 5 项菜单，业务数据仅限本人）
+   ├─ 工作台            欢迎语 + 问题搜索 + 提交工单/我的工单/知识库/AI 助手四个快捷入口
+   │                    下栏为「我的工单 / 常见问题 / AI 助手」，页内可直接提交工单
+   ├─ 我的工单          提交工单、查看进度、回复、催办、确认、评价（仅本人工单）
+   ├─ 知识库            自助查阅解决方案（只读，不显示新建/编辑/删除入口）
+   ├─ AI 智能助手       AI 问答 + 多轮会话管理，支持从首页带问题直达
+   └─ 个人中心          资料修改、头像上传、修改密码
 ```
+
+> 客户端的「我的工单」后端做了资源级过滤（`ticket.customer_id = 当前用户`），
+> 即使手工拼接 URL 也查不到他人工单；知识库的写接口（新增/删除）仅对 ADMIN/SUPERVISOR/AGENT 开放。
 
 ### 核心功能
 
@@ -230,7 +236,7 @@ intelligent-service-desk/
 │   └── src/
 │       ├── views/                    # 页面组件
 │       │   ├── Login.vue             # 登录/注册（含身份选择）
-│       │   ├── Dashboard.vue         # 工作台看板
+│       │   ├── Dashboard.vue         # 工作台（客户端为 Hero+快捷入口+三栏首页）
 │       │   ├── Tickets.vue           # 工单管理
 │       │   ├── Customers.vue         # 客户管理
 │       │   ├── Knowledge.vue         # 知识库
@@ -379,9 +385,9 @@ intelligent-service-desk/
 | GET  | `/`            | 文章分页列表             | ✅    |
 | GET  | `/categories`  | 分类列表（Redis 缓存）   | ✅    |
 | GET  | `/hot`         | 热门文章（Redis 缓存）   | ✅    |
-| POST | `/`            | 新建文章                 | ✅    |
-| PUT  | `/{id}`        | 编辑文章（失效缓存）     | ✅    |
-| DELETE| `/{id}`       | 删除文章（失效缓存）     | ✅    |
+| POST | `/`            | 新建文章                 | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
+| PUT  | `/{id}`        | 编辑文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
+| DELETE| `/{id}`       | 删除文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
 
 ### AI 问答模块 `/api/ai`
 

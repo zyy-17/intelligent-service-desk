@@ -16,10 +16,17 @@ public class MenuService {
             menu("/dashboard", "工作台", "Odometer", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/tickets", "工单管理", "Tickets", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/customers", "客户管理", "User", "ADMIN", "SUPERVISOR"),
-            menu("/knowledge", "知识库", "Collection", "ADMIN", "SUPERVISOR", "AGENT"),
+            menu("/knowledge", "知识库", "Collection", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/chat", "智能问答", "ChatDotRound", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/stats", "数据统计", "DataAnalysis", "ADMIN", "SUPERVISOR"),
-            menu("/system", "系统管理", "Setting", "ADMIN")
+            menu("/system", "系统管理", "Setting", "ADMIN"),
+            menu("/profile", "个人中心", "UserFilled", "CUSTOMER")
+    );
+
+    /** 客户端菜单文案覆盖：把管理味词汇换成客户视角的措辞 */
+    private static final Map<String, String> CUSTOMER_LABELS = Map.of(
+            "/tickets", "我的工单",
+            "/chat", "AI 智能助手"
     );
 
     /** 根据角色返回可见菜单列表 */
@@ -29,9 +36,13 @@ public class MenuService {
             @SuppressWarnings("unchecked")
             List<String> roles = (List<String>) m.get("roles");
             if (roles.contains(role)) {
+                String path = (String) m.get("path");
                 Map<String, Object> item = new HashMap<>();
-                item.put("path", m.get("path"));
-                item.put("label", m.get("label"));
+                item.put("path", path);
+                // 客户角色按客户视角覆盖文案，其他角色沿用通用文案
+                item.put("label", "CUSTOMER".equals(role)
+                        ? CUSTOMER_LABELS.getOrDefault(path, (String) m.get("label"))
+                        : m.get("label"));
                 item.put("icon", m.get("icon"));
                 result.add(item);
             }

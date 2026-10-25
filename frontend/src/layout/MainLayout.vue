@@ -35,7 +35,7 @@
     <!-- 主区域 -->
     <div class="main">
       <header class="topbar">
-        <div class="page-title">{{ $route.meta.title }}</div>
+        <div class="page-title">{{ pageTitle }}</div>
         <!-- 全局搜索 -->
         <div class="global-search" ref="searchBoxRef">
           <el-icon class="search-icon"><Search /></el-icon>
@@ -141,6 +141,11 @@ const isActive = (path) => route.path.startsWith(path)
 const roleMap = { ADMIN: '系统管理员', SUPERVISOR: '客服主管', AGENT: '客服人员', CUSTOMER: '客户' }
 const roleLabel = computed(() => roleMap[auth.role] || auth.role)
 const avatarUrl = computed(() => auth.user?.avatarUrl || '')
+
+// 客户视角的页面标题：与客户端菜单文案保持一致
+const CUSTOMER_TITLES = { '/tickets': '我的工单', '/chat': 'AI 智能助手' }
+const pageTitle = computed(() =>
+  auth.role === 'CUSTOMER' ? (CUSTOMER_TITLES[route.path] || route.meta.title) : route.meta.title)
 
 /* ===== 全局搜索 ===== */
 const keyword = ref('')

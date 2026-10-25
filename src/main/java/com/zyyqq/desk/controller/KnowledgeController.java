@@ -4,6 +4,7 @@ import com.zyyqq.desk.common.ApiResponse;
 import com.zyyqq.desk.entity.KnowledgeArticle;
 import com.zyyqq.desk.entity.KnowledgeCategory;
 import com.zyyqq.desk.service.KnowledgeService;
+import com.zyyqq.desk.security.RequireRole;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -46,14 +47,16 @@ public class KnowledgeController {
         return ApiResponse.ok(knowledgeService.detail(id));
     }
 
-    /** 新增或更新文章 */
+    /** 新增或更新文章（客户只读，不允许维护知识库） */
     @PostMapping
+    @RequireRole({"ADMIN", "SUPERVISOR", "AGENT"})
     public ApiResponse<KnowledgeArticle> save(@RequestBody Map<String, Object> body) {
         return ApiResponse.ok(knowledgeService.save(body));
     }
 
-    /** 删除文章 */
+    /** 删除文章（客户只读，不允许维护知识库） */
     @DeleteMapping("/{id}")
+    @RequireRole({"ADMIN", "SUPERVISOR", "AGENT"})
     public ApiResponse<Void> delete(@PathVariable Long id) {
         knowledgeService.delete(id);
         return ApiResponse.ok();
