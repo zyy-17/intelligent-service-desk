@@ -28,9 +28,9 @@
 | 后端 | Java 25、Spring Boot 4.1.2、Spring Data JDBC、MySQL Connector/J |
 | 前端 | Vue 3、Vite 6、Element Plus、ECharts、Pinia、Vue Router、Axios |
 | 数据库 | MySQL 8.0 |
-| AI | 云端大模型（OpenAI 兼容接口：DeepSeek / 通义百炼 / Kimi / 智谱 / OpenAI 等），支持知识库检索降级 |
+| AI 服务 | Python 3 + FastAPI（独立进程），云端大模型（OpenAI 兼容）+ 知识检索降级 |
 
-> 架构说明：按需求文档采用「模块化单体」起步（第一阶段），后端按 `controller / service / repository / entity / security / config` 分层，业务边界清晰，为后续演进至 Spring Cloud 微服务预留了模块边界。
+> 架构说明：按需求文档采用「模块化单体」起步（第一阶段），后端按 `controller / service / repository / entity / security / config` 分层，业务边界清晰，为后续演进至 Spring Cloud 微服务预留了模块边界。AI 能力按 SRS 要求拆分为独立的 FastAPI 服务（`ai-service/` 目录），Java 作为业务主控方通过 HTTP 调用。
 
 ---
 
@@ -59,6 +59,9 @@ intelligent-service-desk/
 │   ├── src/api/               # Axios 封装
 │   ├── src/store/             # Pinia 状态
 │   └── src/router/            # 路由
+├── ai-service/                # Python FastAPI AI 服务
+│   ├── app/                   # 路由、模型调用、检索逻辑
+│   └── requirements.txt
 ├── pom.xml
 └── README.md
 ```
@@ -139,18 +142,28 @@ npm run build        # 构建产物输出到 src/main/resources/static
 
 ## 🤖 配置云端大模型（可选）
 
-智能问答默认走「知识库检索」兜底，无需任何配置即可使用。若想获得更智能的回答，配置 OpenAI 兼容接口：
+智能问答默认走「知识库检索」兜底，无需任何配置即可使用。若想获得更智能的回答，启动独立 AI 服务并配置 OpenAI 兼容接口。
 
-编辑 `application.yml` 的 `app.ai` 段，或通过环境变量注入：
+### 启动 FastAPI AI 服务
 
-```yaml
-app:
-  ai:
-    enabled: true
-    base-url: ${AI_BASE_URL:https://api.deepseek.com/v1}   # 你的 API 地址
-    api-key: ${AI_API_KEY:}                                 # 你的密钥
-    model: ${AI_MODEL:deepseek-chat}                        # 模型名
+AI 能力由独立的 FastAPI 服务提供（见 `ai-service/` 目录）：
+
+```bash
+cd ai-service
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux / macOS
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+启动后访问 `http://localhost:8000/docs` 查看交互式 API 文档。
+
+### 配置云端模型密钥
+
+编辑 `ai-service/.env`（复制 `.env.example`），或通过环境变量注入：
 
 ```bash
 export AI_BASE_URL=https://api.deepseek.com/v1
@@ -158,7 +171,17 @@ export AI_API_KEY=sk-xxxx
 export AI_MODEL=deepseek-chat
 ```
 
-> 密钥通过环境变量注入，不会写入 Git 仓库。未配置密钥或调用失败时自动降级为知识库检索，不影响核心功能。
+> Java 侧通过 `app.ai-service.base-url`（默认 `http://localhost:8000`，可用 `AI_SERVICE_BASE_URL` 覆盖）调用 FastAPI。未启动 FastAPI 或未配置密钥时，Java 自动降级为本地知识库检索，不影响核心功能。
+
+### AI 服务能力
+
+| 能力 | 端点 |
+| --- | --- |
+| 智能问答（RAG） | `POST /api/ai/chat` |
+| 工单摘要 | `POST /api/ai/summarize` |
+| 分类推荐 | `POST /api/ai/classify` |
+| 回复草稿 | `POST /api/ai/draft` |
+| 知识检索 | `POST /api/ai/search` |
 
 ---
 

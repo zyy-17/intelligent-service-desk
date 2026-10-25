@@ -12,6 +12,13 @@ nexusdesk.docx
 frontend/node_modules/
 frontend/dist/
 
+### AI 服务（Python FastAPI）###
+ai-service/.venv/
+ai-service/__pycache__/
+ai-service/app/__pycache__/
+ai-service/.env
+*.pyc
+
 ### 密钥与本地配置 ###
 .env
 .env.local

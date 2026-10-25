@@ -20,8 +20,8 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 /**
- * 智能问答：优先调用云端大模型（OpenAI 兼容接口）做知识库增强生成（RAG），
- * 未配置密钥或调用失败时，自动降级为知识库关键词检索。
+ * 智能问答：优先调用独立 FastAPI AI 服务（承担模型调用、知识检索、摘要、分类、回复草稿等能力）。
+ * FastAPI 服务不可用时，降级为本地知识库关键词检索，保证核心问答可演示。
  */
 @Slf4j
 @Service
@@ -51,35 +51,89 @@ public class AiService {
             return Map.of("answer", "请输入您的问题", "source", "无", "fallback", true);
         }
 
-        // 1. 知识库检索（先精确子串，再分词宽匹配）
+        // 1. 本地知识库检索（用于组装传给 FastAPI 的上下文，以及降级兜底）
         List<KnowledgeArticle> hits = articleRepository.search(question.trim(), 5);
         if (hits.isEmpty()) {
             hits = fuzzySearch(question.trim());
         }
 
-        // 2. 尝试调用云端模型
-        AppProperties.Ai ai = props.getAi();
-        if (ai.isEnabled() && ai.getApiKey() != null && !ai.getApiKey().isBlank()
-                && ai.getBaseUrl() != null && !ai.getBaseUrl().isBlank()) {
+        // 2. 优先调用 FastAPI AI 服务
+        AppProperties.AiService aiService = props.getAiService();
+        if (aiService.getBaseUrl() != null && !aiService.getBaseUrl().isBlank()) {
             try {
-                String answer = callCloudModel(question, hits, ai);
-                String source = hits.isEmpty() ? "模型生成" : hits.get(0).getTitle();
+                Map<String, Object> result = callFastApi(question, hits, aiService);
                 long duration = System.currentTimeMillis() - start;
-                saveLog(requestId, "QA", "SUCCESS", (int) duration, question, answer.length(), ai.getModel(), source, null);
-                return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", false);
+                saveLog(requestId, "QA", "SUCCESS", (int) duration, question,
+                        String.valueOf(result.get("answer")).length(),
+                        (String) result.get("model"), (String) result.get("source"), null);
+                return result;
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
-                saveLog(requestId, "QA", "FAILED", (int) duration, question, 0, ai.getModel(), null, e.getMessage());
-                log.warn("云端模型调用失败，降级为知识库检索：{}", e.getMessage());
+                saveLog(requestId, "QA", "FAILED", (int) duration, question, 0, "fastapi", null, e.getMessage());
+                log.warn("FastAPI AI 服务调用失败，降级为本地知识库检索：{}", e.getMessage());
             }
         }
 
-        // 3. 降级：知识库检索
+        // 3. 降级：本地知识库检索
         long duration = System.currentTimeMillis() - start;
         String answer = buildFallbackAnswer(question, hits);
         String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
         saveLog(requestId, "QA", "FALLBACK", (int) duration, question, answer.length(), "knowledge-base", source, null);
         return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
+    }
+
+    /**
+     * 调用 FastAPI AI 服务的 /api/ai/chat 接口。
+     * 将本地检索到的知识作为 knowledge 上下文传给 AI 服务，由其完成模型调用与增强生成。
+     */
+    private Map<String, Object> callFastApi(String question, List<KnowledgeArticle> hits,
+                                            AppProperties.AiService aiService) throws Exception {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("question", question);
+        payload.put("knowledge", knowledgePayload(hits));
+
+        String url = aiService.getBaseUrl().replaceAll("/+$", "") + "/api/ai/chat";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(aiService.getTimeoutSeconds()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .build();
+        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+        if (resp.statusCode() != 200) {
+            throw new IllegalStateException("AI 服务返回 " + resp.statusCode());
+        }
+        JsonNode root = objectMapper.readTree(resp.body());
+        String answer = root.path("answer").asText();
+        if (answer == null || answer.isBlank()) {
+            throw new IllegalStateException("AI 服务返回空答案");
+        }
+        String source = root.path("source").asText();
+        boolean fallback = root.path("fallback").asBoolean(false);
+        String model = root.path("model").asText(null);
+        Map<String, Object> result = new HashMap<>();
+        result.put("answer", answer.trim());
+        result.put("source", source == null || source.isBlank() ? "模型生成" : source);
+        result.put("fallback", fallback);
+        if (model != null && !model.isBlank()) {
+            result.put("model", model);
+        }
+        result.put("references", brief(hits));
+        return result;
+    }
+
+    private List<Map<String, Object>> knowledgePayload(List<KnowledgeArticle> hits) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (KnowledgeArticle a : hits) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", a.getId());
+            m.put("title", a.getTitle());
+            m.put("summary", a.getSummary());
+            m.put("body", a.getBody());
+            m.put("keywords", a.getKeywords());
+            list.add(m);
+        }
+        return list;
     }
 
     private List<KnowledgeArticle> fuzzySearch(String question) {
@@ -118,50 +172,6 @@ public class AiService {
         return result;
     }
 
-    private String callCloudModel(String question, List<KnowledgeArticle> hits, AppProperties.Ai ai) throws Exception {
-        // 组装受控上下文
-        StringBuilder ctx = new StringBuilder();
-        for (KnowledgeArticle a : hits) {
-            String body = a.getBody() == null ? "" : a.getBody().replaceAll("(?s)#{1,6}\\s*|\\*|>`?|`", "").trim();
-            if (body.length() > 400) body = body.substring(0, 400);
-            ctx.append("【").append(a.getTitle()).append("】").append(body).append("\n");
-        }
-        String system = "你是「智能客服与工单管理平台」的客服助手，请用简洁、专业的中文回答用户问题。" +
-                "优先依据下面提供的知识库内容回答；如果知识库内容不足，可以结合常识回答，但不要编造具体数字或承诺。";
-        String user = "知识库参考：\n" + (ctx.length() == 0 ? "（无相关知识）" : ctx) + "\n\n用户问题：" + question;
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("model", ai.getModel());
-        payload.put("temperature", ai.getTemperature());
-        payload.put("messages", List.of(
-                Map.of("role", "system", "content", system),
-                Map.of("role", "user", "content", user)
-        ));
-
-        String url = ai.getBaseUrl().replaceAll("/+$", "") + "/chat/completions";
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(ai.getTimeoutSeconds()))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + ai.getApiKey())
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
-                .build();
-        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() != 200) {
-            throw new IllegalStateException("模型接口返回 " + resp.statusCode() + ": " + truncate(resp.body(), 200));
-        }
-        JsonNode root = objectMapper.readTree(resp.body());
-        JsonNode choices = root.path("choices");
-        if (!choices.isArray() || choices.isEmpty()) {
-            throw new IllegalStateException("模型返回无结果");
-        }
-        String answer = choices.get(0).path("message").path("content").asText();
-        if (answer == null || answer.isBlank()) {
-            throw new IllegalStateException("模型返回空内容");
-        }
-        return answer.trim();
-    }
-
     private String buildFallbackAnswer(String question, List<KnowledgeArticle> hits) {
         if (hits.isEmpty()) {
             return "抱歉，未在知识库中找到与「" + question + "」直接相关的答案。\n\n建议您：\n1. 换个关键词重新描述问题；\n2. 提交工单，由人工客服为您处理；\n3. 查看知识库热门文章获取帮助。";
@@ -177,7 +187,7 @@ public class AiService {
                 sb.append("\n· ").append(hits.get(i).getTitle());
             }
         }
-        sb.append("\n\n（当前为知识库检索结果，配置云端模型后可获得更智能的回答。）");
+        sb.append("\n\n（当前为本地知识库检索结果，启动 FastAPI AI 服务后可获得更智能的回答。）");
         return sb.toString();
     }
 

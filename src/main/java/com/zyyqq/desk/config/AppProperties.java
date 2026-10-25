@@ -11,6 +11,7 @@ public class AppProperties {
 
     private Jwt jwt = new Jwt();
     private Ai ai = new Ai();
+    private AiService aiService = new AiService();
 
     @Data
     public static class Jwt {
@@ -26,5 +27,12 @@ public class AppProperties {
         private String model;
         private int timeoutSeconds = 45;
         private double temperature = 0.3;
+    }
+
+    @Data
+    public static class AiService {
+        /** FastAPI AI 服务地址 */
+        private String baseUrl = "http://localhost:8000";
+        private int timeoutSeconds = 50;
     }
 }

@@ -40,13 +40,17 @@ app:
     expire-seconds: 86400
   ai:
     # 云端大模型（OpenAI 兼容接口）：DeepSeek / 通义百炼-compatible / Kimi / 智谱 / OpenAI 均可
-    # 只需修改 base-url、api-key、model 三个值，或直接用环境变量注入
+    # 该配置由独立 FastAPI AI 服务使用（见 ai-service/ 目录），Java 侧通过 ai-service 调用
     enabled: ${AI_ENABLED:true}
     base-url: ${AI_BASE_URL:https://api.deepseek.com/v1}
     api-key: ${AI_API_KEY:}
     model: ${AI_MODEL:deepseek-chat}
     timeout-seconds: 45
     temperature: 0.3
+  ai-service:
+    # 独立 FastAPI AI 服务地址（见 ai-service/ 目录，需单独启动）
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
+    timeout-seconds: 50
 
 logging:
   level:
