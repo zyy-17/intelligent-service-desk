@@ -31,7 +31,7 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const auth = useAuthStore()
   if (to.meta.public) {
     next()
@@ -40,6 +40,10 @@ router.beforeEach((to, from, next) => {
   if (!auth.isLoggedIn) {
     next('/login')
     return
+  }
+  // 本次会话首次导航时向后端同步菜单，避免沿用浏览器里缓存的旧菜单
+  if (!auth.menusLoaded) {
+    await auth.refreshMenus()
   }
   // 角色权限守卫：菜单由后端按角色下发，手输越权路径时拦截（个人中心所有角色可用）
   if (to.name !== 'profile' && to.path !== '/') {

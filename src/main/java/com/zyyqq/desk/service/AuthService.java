@@ -108,6 +108,11 @@ public class AuthService {
         return toMap(user);
     }
 
+    /** 返回当前登录用户可见的侧边栏菜单（前端启动时刷新菜单缓存用） */
+    public List<Map<String, Object>> menus() {
+        return menuService.menusFor(com.zyyqq.desk.security.AuthContext.require().role());
+    }
+
     /** 更新个人资料（昵称/邮箱/手机号） */
     public Map<String, Object> updateProfile(String displayName, String email, String phone) {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();

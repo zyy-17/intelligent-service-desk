@@ -40,6 +40,12 @@ public class AuthController {
         return ApiResponse.ok(authService.updateAvatar(file));
     }
 
+    /** 查询当前用户可见菜单（前端启动时刷新菜单缓存） */
+    @GetMapping("/menus")
+    public ApiResponse<java.util.List<Map<String, Object>>> menus() {
+        return ApiResponse.ok(authService.menus());
+    }
+
     /** 查询当前用户信息 */
     @GetMapping("/profile")
     public ApiResponse<Map<String, Object>> profile() {
