@@ -10,10 +10,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.util.Map;
 
-/**
- * 认证 + 角色校验拦截器。
- * 简化实现：登录后签发带角色信息的 JWT，此处校验签名与角色。
- */
+/** 认证 + 角色校验拦截器：校验 JWT 签名、账号状态与角色权限 */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
 
@@ -25,6 +22,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         this.objectMapper = objectMapper;
     }
 
+    /** 请求前校验登录态与角色权限 */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         if (!(handler instanceof HandlerMethod method)) {
@@ -85,11 +83,13 @@ public class AuthInterceptor implements HandlerInterceptor {
         return true;
     }
 
+    /** 请求完成后清理认证上下文 */
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         AuthContext.clear();
     }
 
+    /** 写出错误响应（JSON 格式） */
     private void writeError(HttpServletResponse response, int code, String msg) throws Exception {
         response.setStatus(code);
         response.setContentType("application/json;charset=UTF-8");

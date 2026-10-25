@@ -7,6 +7,7 @@ import org.springframework.data.annotation.Transient;
 
 import java.time.LocalDateTime;
 
+/** 知识文章实体（对应 knowledge_article 表） */
 @Data
 @Table
 public class KnowledgeArticle {

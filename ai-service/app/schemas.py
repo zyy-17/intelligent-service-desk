@@ -24,6 +24,7 @@ class ErrorDetail(BaseModel):
 # ===== 智能问答 =====
 
 class ChatRequest(BaseModel):
+    """智能问答请求。"""
     question: str = Field(..., min_length=1, max_length=2000, description="用户问题")
     knowledge: List[KnowledgeItem] = Field(default_factory=list, description="Java 传入的知识库上下文")
     session_id: Optional[str] = Field(None, description="会话 ID，传入则自动记录会话消息")
@@ -31,6 +32,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    """智能问答响应。"""
     task_id: str = Field(..., description="任务标识")
     task_type: str = "QA"
     answer: str = Field(..., description="回答内容")
@@ -45,11 +47,13 @@ class ChatResponse(BaseModel):
 # ===== 工单摘要 =====
 
 class SummaryRequest(BaseModel):
+    """工单摘要请求。"""
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=5000)
 
 
 class SummaryResponse(BaseModel):
+    """工单摘要响应。"""
     task_id: str
     task_type: str = "SUMMARY"
     summary: str
@@ -60,17 +64,20 @@ class SummaryResponse(BaseModel):
 # ===== 分类推荐 =====
 
 class CategoryOption(BaseModel):
+    """候选分类项。"""
     id: int
     name: str
 
 
 class ClassifyRequest(BaseModel):
+    """分类推荐请求。"""
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=5000)
     categories: List[CategoryOption] = Field(..., description="候选分类列表")
 
 
 class ClassifyResponse(BaseModel):
+    """分类推荐响应。"""
     task_id: str
     task_type: str = "CLASSIFY"
     category_id: Optional[int] = None
@@ -83,12 +90,14 @@ class ClassifyResponse(BaseModel):
 # ===== 回复草稿 =====
 
 class DraftRequest(BaseModel):
+    """回复草稿请求。"""
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=5000)
     knowledge: List[KnowledgeItem] = Field(default_factory=list)
 
 
 class DraftResponse(BaseModel):
+    """回复草稿响应。"""
     task_id: str
     task_type: str = "DRAFT"
     draft: str
@@ -99,11 +108,13 @@ class DraftResponse(BaseModel):
 # ===== 知识检索 =====
 
 class SearchRequest(BaseModel):
+    """知识检索请求。"""
     query: str = Field(..., min_length=1, max_length=500)
     knowledge: List[KnowledgeItem] = Field(default_factory=list, description="候选知识列表")
 
 
 class SearchResponse(BaseModel):
+    """知识检索响应。"""
     task_id: str
     task_type: str = "SEARCH"
     results: List[KnowledgeItem]
@@ -113,17 +124,20 @@ class SearchResponse(BaseModel):
 # ===== 会话管理 =====
 
 class SessionCreateRequest(BaseModel):
+    """会话创建请求。"""
     user_id: int = Field(..., description="用户 ID")
     title: str = Field("新会话", max_length=100, description="会话标题")
 
 
 class ChatMessage(BaseModel):
+    """会话消息。"""
     role: str
     content: str
     ts: Optional[float] = None
 
 
 class SessionDetail(BaseModel):
+    """会话详情（含消息列表）。"""
     session_id: str
     title: str
     created_at: float
@@ -131,6 +145,7 @@ class SessionDetail(BaseModel):
 
 
 class SessionSummary(BaseModel):
+    """会话列表项。"""
     session_id: str
     title: str
     preview: str = ""

@@ -11,9 +11,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * 轻量 JWT（HS256），避免额外依赖库。
- */
+/** 轻量 JWT 工具（HS256），签发与校验登录凭证 */
 @Component
 public class JwtUtil {
 
@@ -26,6 +24,7 @@ public class JwtUtil {
         this.expireSeconds = props.getJwt().getExpireSeconds();
     }
 
+    /** 生成 JWT token */
     public String create(long uid, String username, String displayName, String role, int status) {
         long now = System.currentTimeMillis() / 1000;
         Map<String, Object> payload = new HashMap<>();
@@ -48,6 +47,7 @@ public class JwtUtil {
         return header + "." + body + "." + sign;
     }
 
+    /** 校验并解析 JWT token，返回 payload */
     @SuppressWarnings("unchecked")
     public Map<String, Object> parse(String token) {
         String[] parts = token.split("\\.");
@@ -73,14 +73,17 @@ public class JwtUtil {
         }
     }
 
+    /** 字节数组 Base64URL 编码 */
     private String b64(byte[] data) {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(data);
     }
 
+    /** 字符串 Base64URL 编码 */
     private String b64(String s) {
         return b64(s.getBytes(StandardCharsets.UTF_8));
     }
 
+    /** 计算 HMAC-SHA256 签名 */
     private byte[] hmac(String data) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -91,6 +94,7 @@ public class JwtUtil {
         }
     }
 
+    /** 恒定时间比较（防时序攻击） */
     private boolean constantTimeEquals(String a, String b) {
         byte[] ba = a.getBytes(StandardCharsets.UTF_8);
         byte[] bb = b.getBytes(StandardCharsets.UTF_8);

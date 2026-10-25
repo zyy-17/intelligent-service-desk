@@ -10,20 +10,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.function.Supplier;
 
-/**
- * Redis 统一支撑层。
- *
- * Key 命名规则：
- *   {prefix}:cache:*     热点数据缓存（热门知识/分类/统计）
- *   {prefix}:auth:*      登录安全（失败计数锁定）
- *   {prefix}:ratelimit:* 接口访问限流
- *   {prefix}:idem:*      工单重复提交幂等标识
- *
- * 降级策略：
- *   - 缓存类操作：Redis 异常时直接回源 MySQL（fail-open），核心业务不受影响；
- *   - 限流/登录安全：Redis 异常时放行并记录 WARN 日志，保证可用性（安全控制依赖 Redis 正常时的计数）；
- *   - 幂等：Redis 异常时跳过幂等检查，由数据库唯一约束兜底。
- */
+/** Redis 统一支撑层：缓存、限流、登录安全计数、幂等，异常时降级放行 */
 @Slf4j
 @Service
 public class RedisSupport {
@@ -56,15 +43,17 @@ public class RedisSupport {
         }
     }
 
+    /** Redis 是否可用 */
     public boolean isAvailable() {
         return available;
     }
 
+    /** 拼装带统一前缀的 Redis key */
     private String key(String scene, String name) {
         return props.getRedis().getKeyPrefix() + ":" + scene + ":" + name;
     }
 
-    /** 读取 JSON 缓存，未命中或异常返回 null 并回源 supplier */
+    /** 读取 JSON 缓存，未命中或异常回源 supplier */
     public <T> T cacheJson(String name, Class<T> type, Duration ttl, Supplier<T> loader) {
         String k = key("cache", name);
         if (available) {
@@ -90,7 +79,7 @@ public class RedisSupport {
         return value;
     }
 
-    /** 按前缀失效缓存，如 evictCache("hot_articles") */
+    /** 按名称批量失效缓存 */
     public void evictCache(String... names) {
         if (!available) return;
         try {
@@ -102,9 +91,7 @@ public class RedisSupport {
         }
     }
 
-    /**
-     * 固定窗口限流计数，返回窗口内请求数。Redis 异常时返回 -1（调用方决定放行）。
-     */
+    /** 固定窗口限流计数，返回窗口内请求数，异常返回 -1 */
     public long rateLimitIncr(String scene, String name, int windowSeconds) {
         String k = key(scene, name);
         try {
@@ -116,7 +103,7 @@ public class RedisSupport {
         }
     }
 
-    /** 登录失败计数 +1，返回累计失败次数。Redis 异常返回 -1（不锁定）。 */
+    /** 登录失败计数 +1，返回累计失败次数 */
     public long recordLoginFailure(String username, int windowSeconds) {
         try {
             return rateLimitIncr("auth", "fail:" + username, windowSeconds);
@@ -134,10 +121,7 @@ public class RedisSupport {
         }
     }
 
-    /**
-     * 幂等锁：同一请求标识在 TTL 内只允许提交一次。
-     * @return true=首次提交（放行），false=重复提交（拒绝）；Redis 异常时返回 true（数据库约束兜底）
-     */
+    /** 幂等锁：同一请求标识在 TTL 内只允许提交一次，异常时返回 true 放行 */
     public boolean tryIdempotent(String requestKey, Duration ttl) {
         String k = key("idem", requestKey);
         try {

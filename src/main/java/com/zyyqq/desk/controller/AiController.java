@@ -8,6 +8,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Map;
 
+/** 智能问答接口：流式/非流式问答、摘要、分类、回复草稿、会话管理 */
 @RestController
 @RequestMapping("/api/ai")
 public class AiController {
@@ -18,6 +19,7 @@ public class AiController {
         this.aiService = aiService;
     }
 
+    /** 非流式问答 */
     @PostMapping("/chat")
     public ApiResponse<Map<String, Object>> chat(@RequestBody Map<String, Object> body) {
         // 附带当前登录用户，供 AI 服务做多轮会话归属
@@ -25,9 +27,7 @@ public class AiController {
         return ApiResponse.ok(aiService.chat(body));
     }
 
-    /**
-     * 流式问答：SSE 逐段返回 AI 回答，前端据此展示思考时间与回答耗时。
-     */
+    /** 流式问答：SSE 逐段返回回答，含思考时间与回答耗时 */
     @PostMapping("/chat/stream")
     public SseEmitter chatStream(@RequestBody Map<String, Object> body) {
         body.put("user_id", AuthContext.require().id());

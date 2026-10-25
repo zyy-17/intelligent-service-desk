@@ -259,6 +259,8 @@ intelligent-service-desk/
 └── README.md
 ```
 
+> 📝 **代码注释规范**：所有 Java 类（`src/main/java`）与 Python 模块（`ai-service/app`）均遵循「类头一行说明 + 每个方法前一行说明」的注释约定，便于阅读与维护。
+
 ---
 
 ## 🗄️ 数据库设计
@@ -386,6 +388,7 @@ intelligent-service-desk/
 | 方法   | 路径           | 说明                              | 认证 |
 | ------ | -------------- | --------------------------------- | ---- |
 | POST   | `/chat`        | 智能问答（限流 20 次/分/用户）    | ✅    |
+| POST   | `/chat/stream` | 流式智能问答（SSE，markdown 渲染）| ✅    |
 | POST   | `/sessions`    | 新建会话                          | ✅    |
 | GET    | `/sessions`    | 会话列表                          | ✅    |
 | GET    | `/sessions/{id}` | 加载指定会话（含历史）          | ✅    |
@@ -552,7 +555,9 @@ java -jar target/intelligent-service-desk-0.0.1-SNAPSHOT.jar
 
 后端运行在 `http://localhost:8080`（内置前端，直接访问即可）。
 
-> ⚠️ 若环境变量存在 `PORT`（如某些 IDE/工具注入），会被 Spring Boot 映射为服务端口导致端口冲突，请显式指定：`java -jar xxx.jar --server.port=8080`
+> ⚠️ 若环境变量存在 `PORT` 或 `SERVER_PORT`/`SERVER__PORT`（如某些 IDE/工具注入），会被 Spring Boot 的 relaxed binding 映射为 `server.port` 导致端口冲突，请显式指定端口规避：`java -jar xxx.jar --server.port=8080`
+
+> 💡 **登录跳转提示**：登录成功后前端按后端下发的角色菜单跳转工作台；若登录后无法跳转，多为后端仍在运行旧代码（回退/改动后未重启），重启后端即可恢复。
 
 ### 第三步：前端（可选，开发模式）
 

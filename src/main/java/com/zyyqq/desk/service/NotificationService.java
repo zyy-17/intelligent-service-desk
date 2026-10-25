@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+/** 站内通知服务：列表、未读数、单条/全部已读 */
 @Service
 public class NotificationService {
 
@@ -17,6 +18,7 @@ public class NotificationService {
         this.notificationRepository = notificationRepository;
     }
 
+    /** 分页查询当前用户的通知列表 */
     public PageResult<Notification> list(int page, int pageSize) {
         long uid = AuthContext.require().id();
         int size = Math.min(Math.max(pageSize, 1), 100);
@@ -26,14 +28,17 @@ public class NotificationService {
         return PageResult.of(list, total, p, size);
     }
 
+    /** 未读通知数量 */
     public long unreadCount() {
         return notificationRepository.countUnread(AuthContext.require().id());
     }
 
+    /** 标记单条通知为已读 */
     public void markRead(Long id) {
         notificationRepository.markRead(id, AuthContext.require().id());
     }
 
+    /** 标记全部通知为已读 */
     public void markAllRead() {
         notificationRepository.markAllRead(AuthContext.require().id());
     }

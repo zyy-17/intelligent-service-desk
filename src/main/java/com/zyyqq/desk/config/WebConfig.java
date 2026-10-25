@@ -11,10 +11,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.nio.file.Paths;
 
-/**
- * 引入 Redis 后 Spring Data 进入多存储严格扫描模式，
- * 需显式声明 JDBC 仓库扫描包，否则接口无法被注册为 Bean。
- */
+/** Web 配置：声明 JDBC 仓库扫描包、注册拦截器与静态资源映射 */
 @EnableJdbcRepositories(basePackages = "com.zyyqq.desk.repository")
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -30,6 +27,7 @@ public class WebConfig implements WebMvcConfigurer {
         this.auditLogInterceptor = auditLogInterceptor;
     }
 
+    /** 注册限流、认证、审计日志拦截器 */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         // 登录限流在最外层（登录为匿名接口，需先于认证拦截器执行）
@@ -47,9 +45,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/ai/chat");
     }
 
-    /**
-     * 头像等本地上传文件的静态访问：/uploads/** 映射到项目根目录下的 uploads/
-     */
+    /** 映射 /uploads/** 到本地 uploads 目录（头像等文件访问） */
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         registry.addResourceHandler("/uploads/**")

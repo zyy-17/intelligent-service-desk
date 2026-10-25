@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 工单服务：工单全生命周期（创建/回复/分配/处理/确认/关闭/评价/催办） */
 @Service
 public class TicketService {
 
@@ -37,6 +38,7 @@ public class TicketService {
         this.jdbc = jdbc;
     }
 
+    /** 分页查询工单（支持状态与关键字过滤） */
     public PageResult<Map<String, Object>> list(int page, int pageSize, String status, String keyword) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
@@ -64,6 +66,7 @@ public class TicketService {
         return PageResult.of(rows, total, p, size);
     }
 
+    /** 工单详情（含消息与历史，客户无权看他人工单且过滤内部备注） */
     public Map<String, Object> detail(Long id) {
         Ticket t = ticketRepository.findDetail(id)
                 .orElseThrow(() -> BizException.notFound("工单不存在"));
@@ -84,6 +87,7 @@ public class TicketService {
         return data;
     }
 
+    /** 创建工单（客户提交，初始状态 PENDING） */
     @Transactional
     public Map<String, Object> create(String title, String description, Long categoryId, String priority) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -118,6 +122,7 @@ public class TicketService {
         return Map.of("id", saved.getId(), "ticketNo", saved.getTicketNo());
     }
 
+    /** 回复工单（公开或内部备注，客服首次公开回复记录响应时间） */
     @Transactional
     public void reply(Long ticketId, String content, String messageType) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -145,6 +150,7 @@ public class TicketService {
         }
     }
 
+    /** 分配/转派工单给客服 */
     @Transactional
     public void assign(Long ticketId, Long assigneeId) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -158,6 +164,7 @@ public class TicketService {
         addNotification(assigneeId, "工单分配", "您有一个新的工单待处理", ticketId);
     }
 
+    /** 客服接单（仅分配给自己） */
     @Transactional
     public void accept(Long ticketId) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -169,6 +176,7 @@ public class TicketService {
         historyRepository.save(history(ticketId, u.id(), "ACCEPT", "ASSIGNED", "PROCESSING", "客服接单"));
     }
 
+    /** 提交解决方案（工单进入待确认） */
     @Transactional
     public void resolve(Long ticketId, String solution) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -181,6 +189,7 @@ public class TicketService {
         addNotification(t.getCustomerId(), "工单待确认", "您的工单已有解决方案，请确认", ticketId);
     }
 
+    /** 客户确认解决方案（已解决则关闭，未解决则重开） */
     @Transactional
     public void confirm(Long ticketId, boolean solved, String feedback) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -201,6 +210,7 @@ public class TicketService {
         }
     }
 
+    /** 关闭已解决工单 */
     @Transactional
     public void close(Long ticketId) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -212,6 +222,7 @@ public class TicketService {
         historyRepository.save(history(ticketId, u.id(), "CLOSE", "RESOLVED", "CLOSED", "关闭工单"));
     }
 
+    /** 重新打开已关闭工单 */
     @Transactional
     public void reopen(Long ticketId, String reason) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -227,6 +238,7 @@ public class TicketService {
         historyRepository.save(history(ticketId, u.id(), "REOPEN", "CLOSED", "PROCESSING", "重新打开：" + reason));
     }
 
+    /** 客户评价工单（1-5 分，不可重复） */
     @Transactional
     public void rate(Long ticketId, int rating, String comment) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -244,6 +256,7 @@ public class TicketService {
         historyRepository.save(history(ticketId, u.id(), "RATE", null, String.valueOf(rating), "客户评价"));
     }
 
+    /** 客户催办未结束工单，通知处理人 */
     @Transactional
     public void urge(Long ticketId, String reason) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -263,18 +276,22 @@ public class TicketService {
         }
     }
 
+    /** 查询可分配的客服列表 */
     public List<Map<String, Object>> agents() {
         return jdbc.queryForList("SELECT id, display_name AS name, department, avatar_color FROM sys_user WHERE role='AGENT' AND status=1 ORDER BY id");
     }
 
+    /** 查询启用的工单分类列表 */
     public List<Map<String, Object>> categories() {
         return jdbc.queryForList("SELECT id, name, color, sla_hours FROM ticket_category WHERE status=1 ORDER BY sort");
     }
 
+    /** 按 id 取工单，不存在则抛异常 */
     private Ticket requireTicket(Long id) {
         return ticketRepository.findById(id).orElseThrow(() -> BizException.notFound("工单不存在"));
     }
 
+    /** 构造工单历史记录对象 */
     private TicketHistory history(Long ticketId, Long operatorId, String action, String oldValue, String newValue, String remark) {
         TicketHistory h = new TicketHistory();
         h.setTicketId(ticketId);
@@ -287,6 +304,7 @@ public class TicketService {
         return h;
     }
 
+    /** 给指定用户发站内通知（失败忽略） */
     private void addNotification(Long recipientId, String title, String content, Long ticketId) {
         try {
             jdbc.update("INSERT INTO notification(recipient_id,type,title,content,ticket_id,is_read,created_at) VALUES(?,?,?,?,?,0,?)",

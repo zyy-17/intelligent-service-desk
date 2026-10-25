@@ -12,9 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-/**
- * 演示数据初始化：仅在数据库为空时填充，保证可重复启动且不污染已有数据。
- */
+/** 演示数据初始化：空库时填充用户/分类/知识/工单/通知，保证可重复启动 */
 @Slf4j
 @Component
 public class DataSeeder implements CommandLineRunner {
@@ -25,6 +23,7 @@ public class DataSeeder implements CommandLineRunner {
         this.jdbc = jdbc;
     }
 
+    /** 启动时检查空库则初始化，并补充知识库 */
     @Override
     public void run(String... args) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user", Long.class);
@@ -37,6 +36,7 @@ public class DataSeeder implements CommandLineRunner {
         ensureKnowledge();
     }
 
+    /** 初始化用户、分类、知识、工单与通知 */
     private void seed() {
         // ===== 用户 =====
         List<Long> adminIds = insertUsers();
@@ -72,6 +72,7 @@ public class DataSeeder implements CommandLineRunner {
         seedNotification(adminId, supId);
     }
 
+    /** 插入各类演示用户并返回管理员/主管 id */
     private List<Long> insertUsers() {
         List<Long> ids = new ArrayList<>();
         ids.add(insertUser("admin", "管理员", "ADMIN", "13800000000", null, "#6366f1"));
@@ -92,6 +93,7 @@ public class DataSeeder implements CommandLineRunner {
         return ids;
     }
 
+    /** 插入单个用户并返回 id */
     private long insertUser(String username, String displayName, String role, String phone, String dept, String color) {
         return insertAndGetId(
                 "INSERT INTO sys_user(username,password_hash,display_name,role,phone,department,avatar_color,status) " +
@@ -99,6 +101,7 @@ public class DataSeeder implements CommandLineRunner {
                 username, PasswordUtil.hash("123456"), displayName, role, phone, dept, color);
     }
 
+    /** 执行插入并返回自增主键 */
     private long insertAndGetId(String sql, Object... args) {
         org.springframework.jdbc.support.KeyHolder keyHolder = new org.springframework.jdbc.support.GeneratedKeyHolder();
         jdbc.update(con -> {
@@ -112,13 +115,12 @@ public class DataSeeder implements CommandLineRunner {
         return key == null ? 0L : key.longValue();
     }
 
+    /** 初始化基础知识文章 */
     private void seedKnowledge(long[] kcats, long adminId) {
         seedKnowledgeArticles(kcats, adminId, baseArticles(kcats));
     }
 
-    /**
-     * 知识库补充：无论库中是否已有数据，按标题判重后补充新文章（幂等，可重复执行）。
-     */
+    /** 按标题判重后补充知识文章（幂等，可重复执行） */
     private void ensureKnowledge() {
         try {
             Long kcatCount = jdbc.queryForObject("SELECT COUNT(*) FROM knowledge_category", Long.class);
@@ -138,6 +140,7 @@ public class DataSeeder implements CommandLineRunner {
         }
     }
 
+    /** 批量写入知识文章（按标题去重） */
     private void seedKnowledgeArticles(long[] kcats, long adminId, Object[][] articles) {
         DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
         Random rnd = new Random(42);
@@ -155,6 +158,7 @@ public class DataSeeder implements CommandLineRunner {
         }
     }
 
+    /** 基础知识文章内容 */
     private Object[][] baseArticles(long[] kcats) {
         return new Object[][]{
                 {"如何重置登录密码", "忘记密码时可通过注册邮箱或手机号自助重置，本文说明操作步骤。",
@@ -190,6 +194,7 @@ public class DataSeeder implements CommandLineRunner {
         };
     }
 
+    /** 补充知识文章内容 */
     private Object[][] extraArticles(long[] kcats) {
         return new Object[][]{
                 {"登录后频繁掉线怎么办", "Cookie/Token 过期或网络波动导致掉线的排查方法。",
@@ -255,6 +260,7 @@ public class DataSeeder implements CommandLineRunner {
         };
     }
 
+    /** 批量生成演示工单数据 */
     private void seedTickets(long adminId, long supId, long[] cats) {
         // 客服与客户 id
         List<Long> agentIds = jdbc.queryForList(
@@ -363,6 +369,7 @@ public class DataSeeder implements CommandLineRunner {
         seedTicketMessages(agentIds, customerIds, rnd, fmt);
     }
 
+    /** 为工单补充消息与历史记录 */
     private void seedTicketMessages(List<Long> agentIds, List<Long> customerIds, Random rnd, DateTimeFormatter fmt) {
         List<Long> ticketIds = jdbc.queryForList("SELECT id FROM ticket ORDER BY id LIMIT 200", Long.class);
         List<Object[]> msgs = new ArrayList<>();
@@ -391,6 +398,7 @@ public class DataSeeder implements CommandLineRunner {
         jdbc.batchUpdate("INSERT INTO ticket_history(ticket_id,operator_id,action,old_value,new_value,remark,created_at) VALUES(?,?,?,?,?,?,?)", histories);
     }
 
+    /** 初始化演示通知 */
     private void seedNotification(long adminId, long supId) {
         DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
         String now = LocalDateTime.now().format(fmt);
@@ -400,10 +408,12 @@ public class DataSeeder implements CommandLineRunner {
                 supId, "TICKET", "有待分配工单", "当前存在待分配工单，请及时处理。", 0, now);
     }
 
+    /** 时间格式化（null 安全） */
     private String fmt(LocalDateTime t, DateTimeFormatter fmt) {
         return t == null ? null : t.format(fmt);
     }
 
+    /** 按权重随机选取一个元素 */
     private String weighted(String[] items, double[] weights, Random rnd) {
         double r = rnd.nextDouble();
         double acc = 0;

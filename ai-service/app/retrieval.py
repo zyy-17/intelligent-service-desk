@@ -7,6 +7,7 @@ from .schemas import KnowledgeItem
 
 
 def _normalize(text: str) -> str:
+    """去掉空白与常见标点，便于文本匹配。"""
     return re.sub(r"[\s，。！？、,.!?：:；;]+", "", text or "")
 
 

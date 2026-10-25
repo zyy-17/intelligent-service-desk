@@ -52,11 +52,13 @@ app.add_middleware(
 
 
 def _task_id() -> str:
+    """生成唯一的任务标识。"""
     return uuid.uuid4().hex
 
 
 @app.get("/health")
 def health():
+    """健康检查：返回服务状态、模型配置与 Redis 可用性。"""
     return {"status": "ok", "model_configured": is_configured(), "redis": store.redis_available}
 
 
@@ -114,6 +116,7 @@ def chat_stream(req: ChatRequest):
     question = req.question.strip()
 
     def _gen():
+        """SSE 生成器：逐段产出 delta，最后产出 done 元信息。"""
         start = time.time()
         hits = search_knowledge(question, req.knowledge)
         # 先发送会话 ID（若已存在）供前端绑定
@@ -209,16 +212,19 @@ def _record_session(req: ChatRequest, question: str, answer: str) -> Optional[st
 
 @app.post("/api/ai/sessions")
 def create_session(req: SessionCreateRequest):
+    """创建新会话。"""
     return store.create(req.user_id, req.title)
 
 
 @app.get("/api/ai/sessions", response_model=List[SessionSummary])
 def list_sessions(user_id: int, limit: int = 50):
+    """查询某用户的会话列表。"""
     return store.list(user_id, limit)
 
 
 @app.get("/api/ai/sessions/{session_id}", response_model=SessionDetail)
 def get_session(session_id: str, user_id: int):
+    """查询会话详情（含历史消息）。"""
     data = store.get(session_id, user_id)
     if data is None:
         raise HTTPException(status_code=404, detail="会话不存在或无权访问")
@@ -227,6 +233,7 @@ def get_session(session_id: str, user_id: int):
 
 @app.delete("/api/ai/sessions/{session_id}")
 def delete_session(session_id: str, user_id: int):
+    """删除会话。"""
     if not store.delete(session_id, user_id):
         raise HTTPException(status_code=404, detail="会话不存在或无权访问")
     return {"deleted": True}
@@ -366,6 +373,7 @@ def _keyword_classify(text: str, categories) -> object | None:
 
 
 def _fallback_answer(question: str, hits) -> str:
+    """无模型或调用失败时的知识检索降级回答。"""
     if not hits:
         return (
             f"抱歉，未在知识库中找到与「{question}」直接相关的答案。\n\n"

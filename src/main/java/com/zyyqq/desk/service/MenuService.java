@@ -7,10 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 菜单与权限配置中心：根据角色拼装侧边栏菜单，后端统一下发。
- * 新增角色 / 调整菜单权限只需改这里，前端无需维护角色映射。
- */
+/** 菜单与权限配置中心：根据角色拼装侧边栏菜单并由后端统一下发 */
 @Service
 public class MenuService {
 
@@ -25,9 +22,7 @@ public class MenuService {
             menu("/system", "系统管理", "Setting", "ADMIN")
     );
 
-    /**
-     * 根据角色返回可见菜单列表。
-     */
+    /** 根据角色返回可见菜单列表 */
     public List<Map<String, Object>> menusFor(String role) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> m : ALL_MENUS) {
@@ -44,6 +39,7 @@ public class MenuService {
         return result;
     }
 
+    /** 构造单个菜单项（path/label/icon/roles） */
     private static Map<String, Object> menu(String path, String label, String icon, String... roles) {
         Map<String, Object> m = new HashMap<>();
         m.put("path", path);

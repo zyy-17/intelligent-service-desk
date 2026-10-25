@@ -4,6 +4,7 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+/** 应用业务配置（JWT/AI/Redis 参数） */
 @Component
 @ConfigurationProperties(prefix = "app")
 @Data

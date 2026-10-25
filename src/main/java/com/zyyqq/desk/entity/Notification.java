@@ -6,6 +6,7 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
+/** 站内通知实体（对应 notification 表） */
 @Data
 @Table
 public class Notification {

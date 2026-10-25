@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 统计服务：全站概况、工单趋势、团队绩效、按角色的个人概览 */
 @Service
 public class StatsService {
 
@@ -34,6 +35,7 @@ public class StatsService {
         this.jdbc = jdbc;
     }
 
+    /** 全站服务概况（带 Redis 热点缓存） */
     public Map<String, Object> overview() {
         // 首页统计热点缓存：短 TTL，Redis 不可用时直接回源 MySQL
         return redisSupport.cacheJson("stats_overview", Map.class,
@@ -41,6 +43,7 @@ public class StatsService {
                 this::loadOverview);
     }
 
+    /** 从数据库加载全站概况数据 */
     private Map<String, Object> loadOverview() {
         Map<String, Object> data = new HashMap<>();
         long total = ticketRepository.countAll();
@@ -72,13 +75,12 @@ public class StatsService {
         return data;
     }
 
+    /** 近 N 天工单趋势 */
     public List<Map<String, Object>> trend(int days) {
         return statsRepository.trend(Math.min(Math.max(days, 1), 90));
     }
 
-    /**
-     * 团队绩效看板（主管/管理员）：每位客服的工单量、解决数、满意度、超时数、平均响应/解决时长。
-     */
+    /** 团队绩效看板：每位客服的工单量、解决数、满意度、超时数等 */
     public List<Map<String, Object>> teamPerformance() {
         return jdbc.queryForList(
                 "SELECT u.id AS agent_id, u.display_name AS name, " +
@@ -97,12 +99,7 @@ public class StatsService {
                 "ORDER BY total DESC");
     }
 
-    /**
-     * 我的概览：按当前登录用户角色返回差异化首页数据。
-     * - 客户：我提交的工单分状态统计 + 最新工单
-     * - 客服：分配给我 / 待处理 / 待我确认的工单
-     * - 主管/管理员：走全站 overview
-     */
+    /** 我的概览：按角色返回差异化首页数据（客户/客服/主管管理员） */
     public Map<String, Object> myOverview() {
         AuthContext.UserInfo u = AuthContext.require();
         if ("CUSTOMER".equals(u.role())) {
@@ -115,6 +112,7 @@ public class StatsService {
         return overview();
     }
 
+    /** 客户个人概览：我提交的工单分状态统计与最新工单 */
     private Map<String, Object> myCustomerOverview(long uid) {
         Map<String, Object> data = new HashMap<>();
         data.put("role", "CUSTOMER");
@@ -132,6 +130,7 @@ public class StatsService {
         return data;
     }
 
+    /** 客服个人概览：分配给我的工单统计与待办列表 */
     private Map<String, Object> myAgentOverview(long uid) {
         Map<String, Object> data = new HashMap<>();
         data.put("role", "AGENT");
@@ -152,6 +151,7 @@ public class StatsService {
         return data;
     }
 
+    /** 统计超时工单数（非终态且超过解决目标时间） */
     private long countOverdue() {
         // 终态：RESOLVED/CLOSED；非终态且 sla_resolve_at 已过为超时
         return statsRepository.countOverdueInternal();

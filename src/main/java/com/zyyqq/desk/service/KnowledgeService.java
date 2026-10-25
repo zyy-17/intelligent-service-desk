@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 知识库服务：文章与分类的增删改查、热门与检索、缓存一致性 */
 @Service
 public class KnowledgeService {
 
@@ -31,12 +32,14 @@ public class KnowledgeService {
         this.props = props;
     }
 
+    /** 查询知识分类列表（带缓存） */
     public List<KnowledgeCategory> categories() {
         return redisSupport.cacheJson("knowledge_categories", List.class,
                 Duration.ofSeconds(props.getRedis().getCategoriesTtl()),
                 categoryRepository::findAllOrdered);
     }
 
+    /** 分页查询文章（支持关键字检索） */
     public PageResult<KnowledgeArticle> list(int page, int pageSize, String keyword) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
@@ -50,6 +53,7 @@ public class KnowledgeService {
         return PageResult.of(list, total, p, size);
     }
 
+    /** 文章详情（客户仅能看已发布，浏览数自增） */
     public KnowledgeArticle detail(Long id) {
         KnowledgeArticle a = articleRepository.findDetail(id)
                 .orElseThrow(() -> BizException.notFound("文章不存在"));
@@ -61,16 +65,19 @@ public class KnowledgeService {
         return a;
     }
 
+    /** 热门文章（带缓存） */
     public List<KnowledgeArticle> hot(int limit) {
         return redisSupport.cacheJson("hot_articles_" + limit, List.class,
                 Duration.ofSeconds(props.getRedis().getHotArticlesTtl()),
                 () -> articleRepository.findHot(limit));
     }
 
+    /** 关键字检索文章 */
     public List<KnowledgeArticle> search(String kw, int limit) {
         return articleRepository.search(kw, Math.min(Math.max(limit, 1), 50));
     }
 
+    /** 新增或更新文章，并主动失效相关缓存 */
     public KnowledgeArticle save(Map<String, Object> body) {
         AuthContext.UserInfo u = AuthContext.require();
         Long id = body.get("id") == null ? null : Long.valueOf(String.valueOf(body.get("id")));
@@ -103,11 +110,13 @@ public class KnowledgeService {
         return saved;
     }
 
+    /** 删除文章并失效缓存 */
     public void delete(Long id) {
         articleRepository.deleteById(id);
         redisSupport.evictCache("hot_articles_6", "hot_articles_5", "hot_articles_10", "knowledge_categories");
     }
 
+    /** 知识库统计信息 */
     public Map<String, Object> stats() {
         Map<String, Object> m = new HashMap<>();
         m.put("total", articleRepository.countAll());

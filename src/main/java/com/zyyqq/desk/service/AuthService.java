@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 认证服务：登录、注册、个人信息与头像、密码管理 */
 @Service
 public class AuthService {
 
@@ -35,6 +36,7 @@ public class AuthService {
         this.menuService = menuService;
     }
 
+    /** 登录：校验账号密码、失败锁定、签发 JWT 并返回用户信息与角色菜单 */
     public Map<String, Object> login(String username, String password) {
         // 登录安全：短时间内连续失败达到阈值则锁定（Redis 计数；Redis 不可用时降级放行并记录日志）
         AppProperties.Redis rc = props.getRedis();
@@ -62,6 +64,7 @@ public class AuthService {
         return data;
     }
 
+    /** 注册新账号（身份白名单，ADMIN 仅管理员分配） */
     @Transactional
     public Map<String, Object> register(String username, String password, String displayName, String email, String role) {
         if (username == null || username.trim().length() < 3) {
@@ -98,12 +101,14 @@ public class AuthService {
         return data;
     }
 
+    /** 查询当前登录用户个人信息 */
     public Map<String, Object> profile() {
         User user = userRepository.findById(com.zyyqq.desk.security.AuthContext.require().id())
                 .orElseThrow(() -> BizException.notFound("用户不存在"));
         return toMap(user);
     }
 
+    /** 更新个人资料（昵称/邮箱/手机号） */
     public Map<String, Object> updateProfile(String displayName, String email, String phone) {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();
         jdbc.update("UPDATE sys_user SET display_name = COALESCE(?, display_name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?",
@@ -111,9 +116,7 @@ public class AuthService {
         return profile();
     }
 
-    /**
-     * 修改密码：校验原密码，新密码至少 6 位。
-     */
+    /** 修改密码：校验原密码，新密码至少 6 位 */
     public void changePassword(String oldPassword, String newPassword) {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();
         if (newPassword == null || newPassword.length() < 6) {
@@ -126,6 +129,7 @@ public class AuthService {
         jdbc.update("UPDATE sys_user SET password_hash = ? WHERE id = ?", PasswordUtil.hash(newPassword), uid);
     }
 
+    /** 用户实体转 Map（脱敏返回给前端） */
     public static Map<String, Object> toMap(User u) {
         Map<String, Object> m = new HashMap<>();
         m.put("id", u.getId());
@@ -141,9 +145,7 @@ public class AuthService {
         return m;
     }
 
-    /**
-     * 保存头像文件到本地 uploads/avatar 目录，并更新用户记录。
-     */
+    /** 上传头像文件到本地 uploads/avatar 目录并更新用户记录 */
     public Map<String, Object> updateAvatar(org.springframework.web.multipart.MultipartFile file) {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();
         if (file == null || file.isEmpty()) {

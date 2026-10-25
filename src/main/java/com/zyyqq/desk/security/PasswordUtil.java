@@ -5,9 +5,7 @@ import javax.crypto.spec.PBEKeySpec;
 import java.security.SecureRandom;
 import java.util.Base64;
 
-/**
- * PBKDF2 密码哈希（salt:hash 格式）。
- */
+/** 密码工具：PBKDF2 哈希（salt:hash 格式）与校验 */
 public final class PasswordUtil {
 
     private static final int ITERATIONS = 120_000;
@@ -17,6 +15,7 @@ public final class PasswordUtil {
     private PasswordUtil() {
     }
 
+    /** 生成密码哈希（salt:hash） */
     public static String hash(String raw) {
         byte[] salt = new byte[16];
         RANDOM.nextBytes(salt);
@@ -25,6 +24,7 @@ public final class PasswordUtil {
                 + ":" + Base64.getEncoder().encodeToString(key);
     }
 
+    /** 校验明文密码与存储哈希是否一致 */
     public static boolean verify(String raw, String stored) {
         try {
             String[] parts = stored.split(":");
@@ -40,6 +40,7 @@ public final class PasswordUtil {
         }
     }
 
+    /** 计算 PBKDF2 派生密钥 */
     private static byte[] pbkdf2(String raw, byte[] salt) {
         try {
             PBEKeySpec spec = new PBEKeySpec(raw.toCharArray(), salt, ITERATIONS, KEY_LENGTH);
@@ -50,6 +51,7 @@ public final class PasswordUtil {
         }
     }
 
+    /** 恒定时间比较字节数组 */
     private static boolean constantTimeEquals(byte[] a, byte[] b) {
         if (a.length != b.length) {
             return false;

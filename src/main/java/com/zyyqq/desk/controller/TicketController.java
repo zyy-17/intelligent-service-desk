@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
+/** 工单接口：查询、创建、回复、分配、处理、确认、评价、催办等 */
 @RestController
 @RequestMapping("/api/tickets")
 public class TicketController {
@@ -23,6 +24,7 @@ public class TicketController {
         this.redisSupport = redisSupport;
     }
 
+    /** 工单分页列表 */
     @GetMapping
     public ApiResponse<PageResult<Map<String, Object>>> list(
             @RequestParam(defaultValue = "1") int page,
@@ -32,11 +34,13 @@ public class TicketController {
         return ApiResponse.ok(ticketService.list(page, pageSize, status, keyword));
     }
 
+    /** 工单详情 */
     @GetMapping("/{id}")
     public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {
         return ApiResponse.ok(ticketService.detail(id));
     }
 
+    /** 创建工单（带幂等去重） */
     @PostMapping
     public ApiResponse<Map<String, Object>> create(
             @RequestBody Map<String, Object> body,
@@ -54,30 +58,35 @@ public class TicketController {
                 str(body.get("priority"))));
     }
 
+    /** 回复工单 */
     @PostMapping("/{id}/messages")
     public ApiResponse<Void> reply(@PathVariable Long id, @RequestBody Map<String, String> body) {
         ticketService.reply(id, body.get("content"), body.get("messageType"));
         return ApiResponse.ok();
     }
 
+    /** 分配/转派工单 */
     @PostMapping("/{id}/assign")
     public ApiResponse<Void> assign(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         ticketService.assign(id, body.get("assigneeId") == null ? null : Long.valueOf(String.valueOf(body.get("assigneeId"))));
         return ApiResponse.ok();
     }
 
+    /** 客服接单 */
     @PostMapping("/{id}/accept")
     public ApiResponse<Void> accept(@PathVariable Long id) {
         ticketService.accept(id);
         return ApiResponse.ok();
     }
 
+    /** 提交解决方案 */
     @PostMapping("/{id}/resolve")
     public ApiResponse<Void> resolve(@PathVariable Long id, @RequestBody Map<String, String> body) {
         ticketService.resolve(id, body.get("solution"));
         return ApiResponse.ok();
     }
 
+    /** 客户确认解决方案 */
     @PostMapping("/{id}/confirm")
     public ApiResponse<Void> confirm(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         ticketService.confirm(id, Boolean.parseBoolean(String.valueOf(body.getOrDefault("solved", false))),
@@ -85,40 +94,47 @@ public class TicketController {
         return ApiResponse.ok();
     }
 
+    /** 关闭工单 */
     @PostMapping("/{id}/close")
     public ApiResponse<Void> close(@PathVariable Long id) {
         ticketService.close(id);
         return ApiResponse.ok();
     }
 
+    /** 重新打开工单 */
     @PostMapping("/{id}/reopen")
     public ApiResponse<Void> reopen(@PathVariable Long id, @RequestBody Map<String, String> body) {
         ticketService.reopen(id, body.get("reason"));
         return ApiResponse.ok();
     }
 
+    /** 客户评价工单 */
     @PostMapping("/{id}/rate")
     public ApiResponse<Void> rate(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         ticketService.rate(id, Integer.parseInt(String.valueOf(body.get("rating"))), str(body.get("comment")));
         return ApiResponse.ok();
     }
 
+    /** 客户催办 */
     @PostMapping("/{id}/urge")
     public ApiResponse<Void> urge(@PathVariable Long id, @RequestBody Map<String, String> body) {
         ticketService.urge(id, body.get("reason"));
         return ApiResponse.ok();
     }
 
+    /** 客服列表 */
     @GetMapping("/meta/agents")
     public ApiResponse<List<Map<String, Object>>> agents() {
         return ApiResponse.ok(ticketService.agents());
     }
 
+    /** 工单分类列表 */
     @GetMapping("/meta/categories")
     public ApiResponse<List<Map<String, Object>>> categories() {
         return ApiResponse.ok(ticketService.categories());
     }
 
+    /** 对象转字符串（null 安全） */
     private String str(Object o) {
         return o == null ? null : String.valueOf(o);
     }

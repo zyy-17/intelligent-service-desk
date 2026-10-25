@@ -6,6 +6,7 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
+/** AI 调用日志实体（对应 ai_task_log 表） */
 @Data
 @Table
 public class AiTaskLog {

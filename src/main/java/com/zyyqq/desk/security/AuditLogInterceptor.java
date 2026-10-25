@@ -7,11 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-/**
- * 操作审计日志拦截器：对写操作（POST/PUT/DELETE）自动记录 INFO 级别日志。
- * 覆盖用户的增（POST）、删（DELETE）、改（PUT）行为，记录操作人、方法、路径、耗时与结果。
- * 注册在 AuthInterceptor 之后，保证 afterCompletion 时 AuthContext 仍可读取当前用户。
- */
+/** 操作审计日志拦截器：对增删改操作记录 INFO 日志（操作人/方法/路径/耗时/结果） */
 @Component
 public class AuditLogInterceptor implements HandlerInterceptor {
 
@@ -19,6 +15,7 @@ public class AuditLogInterceptor implements HandlerInterceptor {
 
     private static final String ATTR_START = AuditLogInterceptor.class.getName() + ".start";
 
+    /** 写操作开始前记录起始时间 */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         String method = request.getMethod();
@@ -29,6 +26,7 @@ public class AuditLogInterceptor implements HandlerInterceptor {
         return true;
     }
 
+    /** 请求完成后输出审计日志 */
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         Object startObj = request.getAttribute(ATTR_START);
@@ -52,6 +50,7 @@ public class AuditLogInterceptor implements HandlerInterceptor {
                 action, user, method, path, cost, result);
     }
 
+    /** 把 HTTP 方法映射为中文操作名 */
     private String actionName(String method) {
         switch (method.toUpperCase()) {
             case "POST":

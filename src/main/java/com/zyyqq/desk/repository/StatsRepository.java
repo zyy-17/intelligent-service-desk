@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 统计数据访问类：趋势、分布、均值、超时等聚合查询 */
 @Repository
 public class StatsRepository {
 

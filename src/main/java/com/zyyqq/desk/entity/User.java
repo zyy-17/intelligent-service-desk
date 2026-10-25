@@ -6,6 +6,7 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
+/** 用户实体（对应 sys_user 表） */
 @Data
 @Table("sys_user")
 public class User {

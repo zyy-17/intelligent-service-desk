@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+/** 管理后台服务：用户管理、操作日志、AI 调用日志、工单分类管理 */
 @Service
 public class AdminService {
 
@@ -29,6 +30,7 @@ public class AdminService {
         this.jdbc = jdbc;
     }
 
+    /** 按角色查询用户列表 */
     public List<Map<String, Object>> users(String role) {
         if (role != null && !role.isBlank()) {
             return jdbc.queryForList(
@@ -40,6 +42,7 @@ public class AdminService {
                         "FROM sys_user ORDER BY role, id");
     }
 
+    /** 更新用户启用/禁用状态 */
     @Transactional
     public void updateUserStatus(Long id, int status) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -50,6 +53,7 @@ public class AdminService {
         audit(u, "UPDATE_USER_STATUS", "USER", String.valueOf(id), "状态改为 " + status);
     }
 
+    /** 更新用户角色 */
     @Transactional
     public void updateUserRole(Long id, String role) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -57,6 +61,7 @@ public class AdminService {
         audit(u, "UPDATE_USER_ROLE", "USER", String.valueOf(id), "角色改为 " + role);
     }
 
+    /** 管理员重置用户密码 */
     @Transactional
     public void resetPassword(Long id, String newPassword) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -67,6 +72,7 @@ public class AdminService {
         audit(u, "RESET_PASSWORD", "USER", String.valueOf(id), "重置密码");
     }
 
+    /** 分页查询操作审计日志 */
     public PageResult<OperationLog> logs(int page, int pageSize) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
@@ -75,9 +81,7 @@ public class AdminService {
         return PageResult.of(list, total, p, size);
     }
 
-    /**
-     * AI 调用日志：按时间倒序分页返回 ai_task_log 记录，供管理员监控 AI 调用情况。
-     */
+    /** AI 调用日志：按时间倒序分页返回，供管理员监控 AI 调用 */
     public PageResult<Map<String, Object>> aiLogs(int page, int pageSize) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
@@ -89,10 +93,12 @@ public class AdminService {
         return PageResult.of(list, total, p, size);
     }
 
+    /** 查询工单分类列表 */
     public List<Map<String, Object>> categories() {
         return jdbc.queryForList("SELECT id, name, color, sla_hours, sort, status FROM ticket_category ORDER BY sort");
     }
 
+    /** 新建或更新工单分类 */
     @Transactional
     public void saveCategory(Map<String, Object> body) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -113,6 +119,7 @@ public class AdminService {
         }
     }
 
+    /** 下架（软删除）工单分类 */
     @Transactional
     public void deleteCategory(Long id) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -120,6 +127,7 @@ public class AdminService {
         audit(u, "DELETE_CATEGORY", "CATEGORY", String.valueOf(id), "下架分类");
     }
 
+    /** 写入操作审计日志（失败不影响主流程） */
     private void audit(AuthContext.UserInfo u, String action, String targetType, String targetId, String detail) {
         try {
             jdbc.update("INSERT INTO operation_log(operator_id,operator_name,action,target_type,target_id,detail,created_at) VALUES(?,?,?,?,?,?,?)",

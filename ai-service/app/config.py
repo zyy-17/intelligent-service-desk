@@ -9,6 +9,7 @@ load_dotenv()
 
 @dataclass
 class Settings:
+    """AI 服务配置：端口、模型、Redis、会话等参数。"""
     port: int = int(os.getenv("AI_SERVICE_PORT", "8000"))
     ai_enabled: bool = os.getenv("AI_ENABLED", "true").lower() == "true"
     ai_base_url: str = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1")

@@ -7,6 +7,7 @@ import org.springframework.data.annotation.Transient;
 
 import java.time.LocalDateTime;
 
+/** 工单历史实体（对应 ticket_history 表） */
 @Data
 @Table
 public class TicketHistory {

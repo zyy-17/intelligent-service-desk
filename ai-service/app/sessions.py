@@ -25,6 +25,7 @@ class SessionStore:
     """会话存储，Redis 不可用时降级为内存字典（仅保证功能可用，重启丢失）。"""
 
     def __init__(self):
+        """初始化存储，尝试连接 Redis，失败则降级为内存字典。"""
         self._memory: Dict[str, dict] = {}
         self._redis = None
         if redis_lib is not None:
@@ -55,14 +56,17 @@ class SessionStore:
 
     @property
     def redis_available(self) -> bool:
+        """Redis 是否可用。"""
         return self._redis is not None
 
     def _k(self, *parts: str) -> str:
+        """拼装带统一前缀的 Redis key。"""
         return ":".join([settings.redis_key_prefix, *parts])
 
     # ---------- 元数据 ----------
 
     def create(self, user_id: int, title: str = "新会话") -> dict:
+        """创建新会话并返回会话信息。"""
         sid = uuid.uuid4().hex
         now = time.time()
         meta = {"user_id": str(user_id), "title": title, "created_at": str(now), "updated_at": str(now)}
@@ -78,6 +82,7 @@ class SessionStore:
         return {"session_id": sid, "title": title, "created_at": now, "messages": []}
 
     def _load(self, sid: str) -> Optional[dict]:
+        """从 Redis 或内存加载会话原始数据。"""
         if self._redis is not None:
             meta = self._redis.hgetall(self._k("session", "data", sid))
             if not meta:
@@ -88,6 +93,7 @@ class SessionStore:
         return self._memory.get(sid)
 
     def get(self, sid: str, user_id: int) -> Optional[dict]:
+        """按会话 ID 与用户 ID 查询会话（校验归属）。"""
         data = self._load(sid)
         if not data or str(data["meta"].get("user_id")) != str(user_id):
             return None
@@ -100,6 +106,7 @@ class SessionStore:
         }
 
     def list(self, user_id: int, limit: int = 50) -> List[dict]:
+        """查询某用户的会话列表（带预览）。"""
         items: List[dict] = []
         if self._redis is not None:
             sids = self._redis.zrevrange(self._k("session", "index", str(user_id)), 0, limit - 1)
@@ -135,6 +142,7 @@ class SessionStore:
         return items
 
     def delete(self, sid: str, user_id: int) -> bool:
+        """删除会话（校验归属）。"""
         data = self._load(sid)
         if not data or str(data["meta"].get("user_id")) != str(user_id):
             return False
@@ -150,6 +158,7 @@ class SessionStore:
     # ---------- 消息 ----------
 
     def append_message(self, sid: str, user_id: int, role: str, content: str) -> bool:
+        """向会话追加一条消息（截断保留最近 N 条）。"""
         data = self._load(sid)
         if not data or str(data["meta"].get("user_id")) != str(user_id):
             return False

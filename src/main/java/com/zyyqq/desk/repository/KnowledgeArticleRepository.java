@@ -9,8 +9,10 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
+/** 知识文章数据访问接口 */
 public interface KnowledgeArticleRepository extends CrudRepository<KnowledgeArticle, Long> {
 
+    /** 分页查询文章（联表带分类/作者名） */
     @Query("""
             SELECT a.*, c.name AS category_name, u.display_name AS author_name
             FROM knowledge_article a
@@ -21,9 +23,11 @@ public interface KnowledgeArticleRepository extends CrudRepository<KnowledgeArti
             """)
     List<KnowledgeArticle> findList(@Param("limit") int limit, @Param("offset") int offset);
 
+    /** 统计文章总数 */
     @Query("SELECT COUNT(*) FROM knowledge_article")
     long countAll();
 
+    /** 查询文章详情（联表） */
     @Query("""
             SELECT a.*, c.name AS category_name, u.display_name AS author_name
             FROM knowledge_article a
@@ -33,6 +37,7 @@ public interface KnowledgeArticleRepository extends CrudRepository<KnowledgeArti
             """)
     Optional<KnowledgeArticle> findDetail(@Param("id") Long id);
 
+    /** 关键字检索已发布文章 */
     @Query("""
             SELECT a.*, c.name AS category_name, u.display_name AS author_name
             FROM knowledge_article a
@@ -46,9 +51,11 @@ public interface KnowledgeArticleRepository extends CrudRepository<KnowledgeArti
             """)
     List<KnowledgeArticle> search(@Param("kw") String kw, @Param("limit") int limit);
 
+    /** 查询热门文章 */
     @Query("SELECT a.*, c.name AS category_name FROM knowledge_article a LEFT JOIN knowledge_category c ON c.id = a.category_id WHERE a.status = 'PUBLISHED' ORDER BY a.view_count DESC LIMIT :limit")
     List<KnowledgeArticle> findHot(@Param("limit") int limit);
 
+    /** 文章浏览量自增 */
     @Modifying
     @Query("UPDATE knowledge_article SET view_count = view_count + 1 WHERE id = :id")
     void incrView(@Param("id") Long id);

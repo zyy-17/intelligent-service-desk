@@ -13,11 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * 接口访问限流拦截器（Redis 计数）。
- * 保护对象：登录接口（按 IP）、AI 问答接口（按用户）。
- * 降级策略：Redis 不可用时放行并记录日志，避免限流组件故障阻断核心业务。
- */
+/** 接口限流拦截器：登录按 IP、AI 问答按用户计数限流 */
 @Slf4j
 @Component
 public class RateLimitInterceptor implements HandlerInterceptor {
@@ -31,6 +27,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         this.props = props;
     }
 
+    /** 请求前对登录/AI 问答接口做限流判断 */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String path = request.getRequestURI();
@@ -61,6 +58,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         return true;
     }
 
+    /** 获取客户端真实 IP（优先 X-Forwarded-For） */
     private String clientIp(HttpServletRequest request) {
         String xff = request.getHeader("X-Forwarded-For");
         if (xff != null && !xff.isBlank()) {
@@ -69,6 +67,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         return request.getRemoteAddr();
     }
 
+    /** 返回 429 限流响应 */
     private boolean reject(HttpServletResponse response, String msg) throws Exception {
         response.setStatus(429);
         response.setContentType("application/json;charset=UTF-8");

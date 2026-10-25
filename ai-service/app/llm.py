@@ -18,6 +18,7 @@ class LLMError(Exception):
 
 
 def is_configured() -> bool:
+    """判断云端模型是否已配置（启用且填了密钥与地址）。"""
     return (
         settings.ai_enabled
         and bool(settings.ai_api_key)

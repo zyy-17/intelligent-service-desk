@@ -12,9 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 工作台全局搜索：一次关键字，同时检索工单 / 客户 / 知识库。
- */
+/** 工作台全局搜索：一次关键字同时检索工单/客户/知识库 */
 @RestController
 @RequestMapping("/api/search")
 public class SearchController {
@@ -25,6 +23,7 @@ public class SearchController {
         this.jdbc = jdbc;
     }
 
+    /** 全局搜索入口 */
     @GetMapping
     public ApiResponse<Map<String, Object>> search(@RequestParam("q") String q) {
         String kw = q == null ? "" : q.trim();
@@ -35,6 +34,7 @@ public class SearchController {
         return ApiResponse.ok(result);
     }
 
+    /** 按关键字检索工单 */
     private List<Map<String, Object>> searchTickets(String kw) {
         String like = "%" + kw + "%";
         return jdbc.queryForList(
@@ -43,6 +43,7 @@ public class SearchController {
                 "WHERE t.ticket_no LIKE ? OR t.title LIKE ? ORDER BY t.created_at DESC LIMIT 6", like, like);
     }
 
+    /** 按关键字检索客户 */
     private List<Map<String, Object>> searchCustomers(String kw) {
         String like = "%" + kw + "%";
         return jdbc.queryForList(
@@ -51,6 +52,7 @@ public class SearchController {
                 "AND (username LIKE ? OR display_name LIKE ? OR company LIKE ?) LIMIT 6", like, like, like);
     }
 
+    /** 按关键字检索知识文章 */
     private List<Map<String, Object>> searchArticles(String kw) {
         String like = "%" + kw + "%";
         return jdbc.queryForList(

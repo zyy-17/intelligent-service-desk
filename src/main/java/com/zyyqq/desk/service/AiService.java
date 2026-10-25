@@ -19,10 +19,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
-/**
- * 智能问答：优先调用独立 FastAPI AI 服务（承担模型调用、知识检索、摘要、分类、回复草稿等能力）。
- * FastAPI 服务不可用时，降级为本地知识库关键词检索，保证核心问答可演示。
- */
+/** 智能问答：优先调用 FastAPI AI 服务，失败时降级本地知识库检索 */
 @Slf4j
 @Service
 public class AiService {
@@ -44,6 +41,7 @@ public class AiService {
         this.jdbc = jdbc;
     }
 
+    /** 非流式问答：检索知识库、调用 AI 服务，失败降级本地并记录日志 */
     public Map<String, Object> chat(Map<String, Object> body) {
         String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
         String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
@@ -92,10 +90,7 @@ public class AiService {
         return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
     }
 
-    /**
-     * 调用 FastAPI AI 服务的 /api/ai/chat 接口。
-     * 将本地检索到的知识作为 knowledge 上下文传给 AI 服务，由其完成模型调用与增强生成。
-     */
+    /** 调用 FastAPI 的 /api/ai/chat 接口，携带本地检索知识作为上下文 */
     private Map<String, Object> callFastApi(String question, String sessionId, Object userId,
                                             List<KnowledgeArticle> hits,
                                             AppProperties.AiService aiService) throws Exception {
@@ -143,10 +138,7 @@ public class AiService {
         return result;
     }
 
-    /**
-     * 通用代理：把会话管理请求转发给 FastAPI AI 服务。
-     * AI 服务不可用时抛出异常，由全局异常处理返回提示。
-     */
+    /** 通用代理：把会话管理等请求转发给 FastAPI AI 服务 */
     public Object proxy(String method, String pathWithQuery, Map<String, Object> body) {
         AppProperties.AiService aiService = props.getAiService();
         if (aiService.getBaseUrl() == null || aiService.getBaseUrl().isBlank()) {
@@ -182,6 +174,7 @@ public class AiService {
         }
     }
 
+    /** 把检索到的知识文章组装为传给 AI 服务的 payload */
     private List<Map<String, Object>> knowledgePayload(List<KnowledgeArticle> hits) {
         List<Map<String, Object>> list = new ArrayList<>();
         for (KnowledgeArticle a : hits) {
@@ -196,6 +189,7 @@ public class AiService {
         return list;
     }
 
+    /** 模糊检索：把问题切分为 2 字短语按命中次数评分取最相关文章 */
     private List<KnowledgeArticle> fuzzySearch(String question) {
         // 将问题切分为 2 字短语，逐个短语做 LIKE 匹配，取命中次数最多的文章
         java.util.Map<Long, Integer> score = new java.util.LinkedHashMap<>();
@@ -232,6 +226,7 @@ public class AiService {
         return result;
     }
 
+    /** 用本地知识库命中的文章拼装降级回答 */
     private String buildFallbackAnswer(String question, List<KnowledgeArticle> hits) {
         if (hits.isEmpty()) {
             return "抱歉，未在知识库中找到与「" + question + "」直接相关的答案。\n\n建议您：\n1. 换个关键词重新描述问题；\n2. 提交工单，由人工客服为您处理；\n3. 查看知识库热门文章获取帮助。";
@@ -251,6 +246,7 @@ public class AiService {
         return sb.toString();
     }
 
+    /** 把命中文章精简为引用摘要列表 */
     private List<Map<String, Object>> brief(List<KnowledgeArticle> hits) {
         List<Map<String, Object>> r = new ArrayList<>();
         for (KnowledgeArticle a : hits) {
@@ -263,6 +259,7 @@ public class AiService {
         return r;
     }
 
+    /** 保存 AI 调用日志（失败不影响主流程） */
     private void saveLog(String requestId, String taskType, String status, int duration, String question,
                          Integer answerLength, String model, String source, String error) {
         try {
@@ -284,10 +281,7 @@ public class AiService {
         }
     }
 
-    /**
-     * 流式问答：调用 FastAPI 的 /api/ai/chat/stream 端点，逐段回调 delta 文本。
-     * 完成后回调 done（含 source/model/session_id/duration_ms）。
-     */
+    /** 流式问答：调用 FastAPI 流式端点逐段回调 delta，完成回调 done */
     public void chatStream(Map<String, Object> body, StreamCallback callback) throws Exception {
         String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
         String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
@@ -401,7 +395,7 @@ public class AiService {
                 requestId, userId, truncate(question, 100), sourceRef[0], duration, answerBuf.length());
     }
 
-    /** 流式回调接口 */
+    /** 流式回调接口：onDelta 逐段返回文本，onDone 返回完成元信息 */
     @FunctionalInterface
     public interface StreamCallback {
         void onDelta(String delta) throws Exception;
@@ -409,6 +403,7 @@ public class AiService {
         }
     }
 
+    /** 截断字符串到指定长度（避免日志/存库过长） */
     private String truncate(String s, int n) {
         if (s == null) return null;
         return s.length() <= n ? s : s.substring(0, n);

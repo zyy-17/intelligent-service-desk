@@ -7,8 +7,10 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 
+/** 工单消息数据访问接口 */
 public interface TicketMessageRepository extends CrudRepository<TicketMessage, Long> {
 
+    /** 查询某工单的消息（联表带发送人信息） */
     @Query("""
             SELECT m.*, u.display_name AS sender_name, u.role AS sender_role, u.avatar_color AS avatar_color
             FROM ticket_message m

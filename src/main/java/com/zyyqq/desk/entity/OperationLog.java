@@ -6,6 +6,7 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
+/** 操作日志实体（对应 operation_log 表） */
 @Data
 @Table
 public class OperationLog {
