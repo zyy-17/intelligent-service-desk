@@ -29,6 +29,29 @@
         <div ref="satRef" class="chart"></div>
       </div>
     </div>
+
+    <!-- 团队绩效看板 -->
+    <div class="panel-card team-panel">
+      <div class="panel-head"><span class="panel-title">团队绩效</span></div>
+      <el-table :data="team" size="small" stripe>
+        <el-table-column prop="name" label="客服姓名" min-width="120" />
+        <el-table-column prop="total" label="工单总数" width="100" align="center" sortable />
+        <el-table-column prop="resolved" label="已解决" width="90" align="center" sortable />
+        <el-table-column prop="overdue" label="超时" width="80" align="center" sortable>
+          <template #default="{ row }">
+            <span :style="{ color: row.overdue > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }">{{ row.overdue }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="satisfaction" label="满意度" width="90" align="center" sortable>
+          <template #default="{ row }">
+            <span v-if="row.satisfaction != null">{{ row.satisfaction }} / 5</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="avg_response_min" label="平均响应(分)" width="110" align="center" sortable />
+        <el-table-column prop="avg_resolve_hours" label="平均解决(时)" width="110" align="center" sortable />
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -48,6 +71,7 @@ const statusName = { PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '�
 const priorityName = { URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' }
 
 const kpi = ref([])
+const team = ref([])
 
 async function load() {
   overview.value = await api.get('/stats/overview')
@@ -60,6 +84,7 @@ async function load() {
     { label: '超时工单', value: d.overdueTickets, color: '#ef4444' },
     { label: '客户数', value: d.customerCount, color: '#06b6d4' }
   ]
+  team.value = await api.get('/stats/team-performance')
   await nextTick()
   renderCharts()
 }
@@ -126,6 +151,8 @@ onBeforeUnmount(() => {
 .kpi-label { color: var(--text-sub); font-size: 13px; margin-top: 4px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .chart-panel { padding: 16px; }
+.team-panel { padding: 16px; }
+.muted { color: #c0c4cc; }
 .panel-head { margin-bottom: 12px; }
 .panel-title { font-size: 15px; font-weight: 600; }
 .chart { height: 300px; }

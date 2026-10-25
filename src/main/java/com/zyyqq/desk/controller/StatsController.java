@@ -1,6 +1,7 @@
 package com.zyyqq.desk.controller;
 
 import com.zyyqq.desk.common.ApiResponse;
+import com.zyyqq.desk.security.RequireRole;
 import com.zyyqq.desk.service.StatsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,5 +34,11 @@ public class StatsController {
     @GetMapping("/trend")
     public ApiResponse<List<Map<String, Object>>> trend(@RequestParam(defaultValue = "7") int days) {
         return ApiResponse.ok(statsService.trend(days));
+    }
+
+    @GetMapping("/team-performance")
+    @RequireRole({"ADMIN", "SUPERVISOR"})
+    public ApiResponse<List<Map<String, Object>>> teamPerformance() {
+        return ApiResponse.ok(statsService.teamPerformance());
     }
 }

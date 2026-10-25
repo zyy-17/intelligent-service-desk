@@ -50,6 +50,12 @@ public class AdminController {
         return ApiResponse.ok(adminService.logs(page, pageSize));
     }
 
+    @GetMapping("/ai-logs")
+    public ApiResponse<PageResult<Map<String, Object>>> aiLogs(@RequestParam(defaultValue = "1") int page,
+                                                               @RequestParam(defaultValue = "20") int pageSize) {
+        return ApiResponse.ok(adminService.aiLogs(page, pageSize));
+    }
+
     @GetMapping("/categories")
     public ApiResponse<List<Map<String, Object>>> categories() {
         return ApiResponse.ok(adminService.categories());

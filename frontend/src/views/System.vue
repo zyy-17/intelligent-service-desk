@@ -83,6 +83,33 @@
           </div>
         </div>
       </el-tab-pane>
+
+      <!-- AI 调用日志 -->
+      <el-tab-pane label="AI 日志" name="aiLogs">
+        <div class="panel-card table-panel">
+          <el-table :data="aiLogs" stripe v-loading="loadingAiLogs" style="width: 100%">
+            <el-table-column prop="task_type" label="任务类型" width="120" />
+            <el-table-column prop="status" label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'SUCCESS' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="question" label="问题" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="answer_length" label="回答长度" width="90" align="center" />
+            <el-table-column prop="duration_ms" label="耗时(ms)" width="100" align="center" />
+            <el-table-column prop="model" label="模型" width="120" show-overflow-tooltip />
+            <el-table-column prop="source" label="引用知识" width="120" show-overflow-tooltip />
+            <el-table-column prop="error_summary" label="错误" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="created_at" label="时间" width="160">
+              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+            </el-table-column>
+          </el-table>
+          <div class="pager">
+            <el-pagination background layout="total, prev, pager, next" :total="aiLogTotal"
+                           :page-size="20" :current-page="aiLogPage" @current-change="loadAiLogs" />
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 分类编辑 -->
@@ -119,6 +146,10 @@ const logs = ref([])
 const loadingLogs = ref(false)
 const logPage = ref(1)
 const logTotal = ref(0)
+const aiLogs = ref([])
+const loadingAiLogs = ref(false)
+const aiLogPage = ref(1)
+const aiLogTotal = ref(0)
 
 const catVisible = ref(false)
 const catForm = reactive({ id: null, name: '', sla_hours: 24, sort: 0, color: '#6366f1' })
@@ -142,6 +173,16 @@ async function loadLogs(page = 1) {
     logs.value = data.list || []
     logTotal.value = data.total
   } finally { loadingLogs.value = false }
+}
+
+async function loadAiLogs(page = 1) {
+  loadingAiLogs.value = true
+  aiLogPage.value = page
+  try {
+    const data = await api.get('/admin/ai-logs', { params: { page, pageSize: 20 } })
+    aiLogs.value = data.list || []
+    aiLogTotal.value = data.total
+  } finally { loadingAiLogs.value = false }
 }
 
 async function toggleStatus(row) {
@@ -190,6 +231,7 @@ onMounted(() => {
   loadUsers()
   loadCategories()
   loadLogs(1)
+  loadAiLogs(1)
 })
 </script>
 

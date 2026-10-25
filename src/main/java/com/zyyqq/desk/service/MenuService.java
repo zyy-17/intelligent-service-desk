@@ -14,15 +14,15 @@ import java.util.Map;
 @Service
 public class MenuService {
 
-    /** 全部菜单项定义（含可见角色），前端据此渲染侧边栏 */
+    /** 全部菜单项定义（含可见角色），前端据此渲染侧边栏；path 带前导 / 与前端路由一致 */
     private static final List<Map<String, Object>> ALL_MENUS = List.of(
-            menu("dashboard", "工作台", "Odometer", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
-            menu("tickets", "工单管理", "Tickets", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
-            menu("customers", "客户管理", "User", "ADMIN", "SUPERVISOR"),
-            menu("knowledge", "知识库", "Collection", "ADMIN", "SUPERVISOR", "AGENT"),
-            menu("chat", "智能问答", "ChatDotRound", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
-            menu("stats", "数据统计", "DataAnalysis", "ADMIN", "SUPERVISOR"),
-            menu("system", "系统管理", "Setting", "ADMIN")
+            menu("/dashboard", "工作台", "Odometer", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
+            menu("/tickets", "工单管理", "Tickets", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
+            menu("/customers", "客户管理", "User", "ADMIN", "SUPERVISOR"),
+            menu("/knowledge", "知识库", "Collection", "ADMIN", "SUPERVISOR", "AGENT"),
+            menu("/chat", "智能问答", "ChatDotRound", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
+            menu("/stats", "数据统计", "DataAnalysis", "ADMIN", "SUPERVISOR"),
+            menu("/system", "系统管理", "Setting", "ADMIN")
     );
 
     /**

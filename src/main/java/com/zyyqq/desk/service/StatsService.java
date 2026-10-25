@@ -77,6 +77,27 @@ public class StatsService {
     }
 
     /**
+     * 团队绩效看板（主管/管理员）：每位客服的工单量、解决数、满意度、超时数、平均响应/解决时长。
+     */
+    public List<Map<String, Object>> teamPerformance() {
+        return jdbc.queryForList(
+                "SELECT u.id AS agent_id, u.display_name AS name, " +
+                "       COUNT(t.id) AS total, " +
+                "       SUM(CASE WHEN t.status IN ('RESOLVED','CLOSED') THEN 1 ELSE 0 END) AS resolved, " +
+                "       SUM(CASE WHEN t.status NOT IN ('RESOLVED','CLOSED') AND t.sla_resolve_at IS NOT NULL " +
+                "                AND t.sla_resolve_at < NOW() THEN 1 ELSE 0 END) AS overdue, " +
+                "       ROUND(AVG(t.satisfaction), 1) AS satisfaction, " +
+                "       ROUND(AVG(CASE WHEN t.first_response_at IS NOT NULL " +
+                "                THEN TIMESTAMPDIFF(MINUTE, t.created_at, t.first_response_at) END)) AS avg_response_min, " +
+                "       ROUND(AVG(CASE WHEN t.resolved_at IS NOT NULL " +
+                "                THEN TIMESTAMPDIFF(MINUTE, t.created_at, t.resolved_at) / 60 END), 1) AS avg_resolve_hours " +
+                "FROM sys_user u LEFT JOIN ticket t ON t.assignee_id = u.id " +
+                "WHERE u.role = 'AGENT' " +
+                "GROUP BY u.id, u.display_name " +
+                "ORDER BY total DESC");
+    }
+
+    /**
      * 我的概览：按当前登录用户角色返回差异化首页数据。
      * - 客户：我提交的工单分状态统计 + 最新工单
      * - 客服：分配给我 / 待处理 / 待我确认的工单

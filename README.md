@@ -37,8 +37,6 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 - ⚙️ **系统管理**：用户角色、工单分类、审计日志
 - 🛡️ **安全防护**：JWT 认证、接口级 + 资源级权限校验、PBKDF2 密码哈希、内部备注隔离、接口限流、工单幂等
 
-> 项目名称：intelligent-service-desk（原代号 NexusDesk 已全面替换）
-
 ---
 
 ## 🌍 项目背景

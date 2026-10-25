@@ -75,6 +75,20 @@ public class AdminService {
         return PageResult.of(list, total, p, size);
     }
 
+    /**
+     * AI 调用日志：按时间倒序分页返回 ai_task_log 记录，供管理员监控 AI 调用情况。
+     */
+    public PageResult<Map<String, Object>> aiLogs(int page, int pageSize) {
+        int size = Math.min(Math.max(pageSize, 1), 100);
+        int p = Math.max(page, 1);
+        long total = jdbc.queryForObject("SELECT COUNT(*) FROM ai_task_log", Long.class);
+        List<Map<String, Object>> list = jdbc.queryForList(
+                "SELECT id, request_id, task_type, status, duration_ms, question, answer_length, " +
+                        "model, source, error_summary, created_at FROM ai_task_log ORDER BY id DESC LIMIT ? OFFSET ?",
+                size, (p - 1) * size);
+        return PageResult.of(list, total, p, size);
+    }
+
     public List<Map<String, Object>> categories() {
         return jdbc.queryForList("SELECT id, name, color, sla_hours, sort, status FROM ticket_category ORDER BY sort");
     }
