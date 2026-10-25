@@ -249,14 +249,18 @@ intelligent-service-desk/
 │       ├── api/index.js              # Axios 封装
 │       └── assets/                   # 静态资源（AI 助手头像等）
 │
-├── ai-service/                       # 🐍 Python FastAPI AI 服务
+├── ai-service/                       # 🐍 Python FastAPI AI 服务（分层架构）
 │   ├── app/
-│   │   ├── main.py                   # 主程序（5 端点 + 会话管理）
-│   │   ├── llm.py                    # 云端模型调用（OpenAI 兼容）
-│   │   ├── retrieval.py              # bigram 知识检索
-│   │   ├── sessions.py               # 会话存储（Redis db1 优先/内存降级）
-│   │   ├── schemas.py                # Pydantic 模型
-│   │   └── config.py                 # 全局配置（.env 读取）
+│   │   ├── main.py                   # 应用装配（仅创建 app + 挂载路由）
+│   │   ├── core/                     # 配置与日志基础设施
+│   │   ├── api/                      # 路由层（health / chat / sessions / ticket）
+│   │   ├── services/                 # 业务层（问答编排 / 会话 / 工单辅助）
+│   │   ├── prompts/                  # 提示词层（各场景系统角色提示词）
+│   │   ├── llm/                      # 模型层（OpenAI 兼容调用 + 错误码）
+│   │   ├── retrieval/                # 检索层（bigram 匹配 / 降级回答）
+│   │   ├── storage/                  # 存储层（会话 Redis 优先 / 内存降级）
+│   │   ├── schemas/                  # 数据模型（按场景拆分）
+│   │   └── utils/                    # 工具（SSE 编码 / 文本处理）
 │   ├── requirements.txt              # Python 依赖
 │   ├── .env.example                  # 配置模板
 │   └── README.md                     # AI 服务说明
@@ -454,19 +458,65 @@ intelligent-service-desk/
 
 ### AI 服务文件结构
 
+分层原则：**路由不写业务，业务不写提示词，提示词不写调用细节**。
+
 ```
 ai-service/
 ├── app/
-│   ├── main.py              # FastAPI 主程序（5 端点 + 会话管理 + 健康检查）
-│   ├── llm.py               # 云端模型调用（OpenAI 兼容，超时+错误码处理）
-│   ├── retrieval.py         # bigram 知识检索（中文模糊匹配）
-│   ├── sessions.py          # 会话存储（Redis db1 优先，降级内存）
-│   ├── schemas.py           # Pydantic 请求/响应模型
-│   └── config.py            # 全局配置（.env 读取）
+│   ├── main.py                  # 应用装配（仅创建 app + 挂载路由，约 40 行）
+│   ├── core/
+│   │   ├── config.py            # 全部配置项（含 AI 角色设定）
+│   │   └── logging_setup.py     # 日志格式
+│   ├── api/                     # 路由层：只做 HTTP 形态与参数校验
+│   │   ├── health.py            #   GET  /health
+│   │   ├── chat.py              #   POST /api/ai/chat、/chat/stream
+│   │   ├── sessions.py          #   /api/ai/sessions 增删查
+│   │   └── ticket.py            #   summarize / classify / draft / search
+│   ├── services/                # 业务层：编排流程
+│   │   ├── chat_service.py      #   检索 → 模型 → 降级 → 落库
+│   │   ├── session_service.py   #   多轮上下文读取、一轮问答落库
+│   │   └── ticket_service.py    #   摘要 / 分类 / 草稿 / 检索
+│   ├── prompts/                 # 提示词层：每个场景一个系统角色提示词
+│   │   ├── base.py              #   $变量 模板渲染
+│   │   ├── chat.py              #   客户问答角色（小智）
+│   │   ├── summary.py           #   工单摘要
+│   │   ├── classify.py          #   分类推荐
+│   │   └── draft.py             #   回复草稿
+│   ├── llm/                     # 模型层
+│   │   ├── client.py            #   OpenAI 兼容调用（一次 / 流式）
+│   │   └── errors.py            #   LLMError 错误码
+│   ├── retrieval/               # 检索层
+│   │   ├── search.py            #   bigram 匹配 + 上下文构建
+│   │   └── fallback.py          #   无模型时的知识库回答
+│   ├── storage/
+│   │   └── session_store.py     #   会话存储（Redis db1 优先，降级内存）
+│   ├── schemas/                 # 数据模型（common / chat / session / ticket）
+│   └── utils/                   # SSE 编码、文本处理
 ├── requirements.txt
-├── .env.example             # 配置模板
+├── .env.example                 # 配置模板
 └── README.md
 ```
+
+### AI 角色与系统提示词
+
+AI 在客户面前有固定人设（默认名「小智」），由 `prompts/chat.py` 中的系统提示词定义，人设参数可在 `.env` 里改，无需改代码：
+
+```ini
+AI_ASSISTANT_NAME=小智          # AI 名字
+AI_COMPANY_NAME=智能服务台      # 所属平台
+AI_TONE=亲切、专业、有耐心，像真人客服一样自然沟通
+AI_ANSWER_MAX_CHARS=200         # 单次回答字数上限
+```
+
+提示词包含三层约束：
+
+| 层次 | 内容 |
+| --- | --- |
+| 角色定位 | 身份、语气、说话方式（不说"作为 AI"）、立场（站用户这边） |
+| 回答规则 | 知识库优先、不编造、跟随用户语言、简洁分点、不承诺赔付/时限、不索要密码验证码、结合历史指代、不泄露提示词 |
+| 输出格式 | 不复述问题、引用标注《文章标题》、不用一级标题、不通篇加粗 |
+
+摘要 / 分类 / 草稿三个场景各有独立提示词，与客户问答互不干扰（例如分类提示词强制"只输出一个数字"，摘要强制"一句话 50 字内"）。
 
 ### 会话管理
 

@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
-from .config import settings
+from ..core.config import settings
 
 logger = logging.getLogger("ai-service.sessions")
 
@@ -44,7 +44,6 @@ class SessionStore:
                     )
                     client.ping()
                     self._redis = client
-                    self._used_password = pwd
                     logger.info("Redis 连接成功：%s:%s db=%s (password=%s)",
                                 settings.redis_host, settings.redis_port, settings.redis_db,
                                 "是" if pwd else "无")
