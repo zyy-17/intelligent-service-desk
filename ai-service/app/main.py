@@ -10,9 +10,10 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .config import settings
-from .llm import chat_completion, is_configured, LLMError
+from .llm import chat_completion, chat_completion_stream, is_configured, LLMError
 from .retrieval import search_knowledge, build_context, SYSTEM_PROMPT
 from .sessions import store
 from .schemas import (
@@ -105,6 +106,64 @@ def chat(req: ChatRequest):
         fallback=True,
         session_id=sid,
     )
+
+
+@app.post("/api/ai/chat/stream")
+def chat_stream(req: ChatRequest):
+    """流式智能问答：以 SSE 形式逐段返回模型回答，支持会话记录。"""
+    question = req.question.strip()
+
+    def _gen():
+        start = time.time()
+        hits = search_knowledge(question, req.knowledge)
+        # 先发送会话 ID（若已存在）供前端绑定
+        try:
+            ctx = build_context(hits)
+            history = _recent_history(req.session_id, req.user_id)
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            messages.extend(history)
+            messages.append({
+                "role": "user",
+                "content": f"知识库参考：\n{ctx or '（无相关知识）'}\n\n用户问题：{question}",
+            })
+
+            if is_configured():
+                answer_parts = []
+                for piece in chat_completion_stream(messages):
+                    answer_parts.append(piece)
+                    yield _sse("delta", piece)
+                answer = "".join(answer_parts)
+                source = hits[0].title if hits else "模型生成"
+                fallback = False
+            else:
+                raise LLMError("AI_NOT_CONFIGURED", "未配置云端模型")
+        except LLMError as e:
+            logger.warning("流式调用失败，降级为知识检索：%s", e.message)
+            answer = _fallback_answer(question, hits)
+            source = hits[0].title if hits else "未找到匹配知识"
+            fallback = True
+            yield _sse("delta", answer)
+
+        duration_ms = int((time.time() - start) * 1000)
+        sid = _record_session(req, question, answer)
+        yield _sse("done", "", {
+            "source": source,
+            "fallback": fallback,
+            "model": settings.ai_model if not fallback else None,
+            "session_id": sid,
+            "duration_ms": duration_ms,
+        })
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _sse(event: str, data: str, meta: dict | None = None):
+    """构造单条 SSE 消息。"""
+    import json as _json
+    payload = {"event": event, "data": data}
+    if meta:
+        payload.update(meta)
+    return f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def _recent_history(session_id: Optional[str], user_id: Optional[int]):

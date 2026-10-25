@@ -69,11 +69,16 @@ public class AiService {
                 saveLog(requestId, "QA", "SUCCESS", (int) duration, question,
                         String.valueOf(result.get("answer")).length(),
                         (String) result.get("model"), (String) result.get("source"), null);
+                log.info("[AI-QA] requestId={} 用户={} 问题={} 来源={} 耗时={}ms 回答长度={}",
+                        requestId, userId, truncate(question, 100), result.get("source"), duration,
+                        String.valueOf(result.get("answer")).length());
                 return result;
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
                 saveLog(requestId, "QA", "FAILED", (int) duration, question, 0, "fastapi", null, e.getMessage());
                 log.warn("FastAPI AI 服务调用失败，降级为本地知识库检索：{}", e.getMessage());
+                log.info("[AI-QA] requestId={} 用户={} 问题={} 调用FastAPI失败耗时={}ms 错误={}",
+                        requestId, userId, truncate(question, 100), duration, e.getMessage());
             }
         }
 
@@ -82,6 +87,8 @@ public class AiService {
         String answer = buildFallbackAnswer(question, hits);
         String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
         saveLog(requestId, "QA", "FALLBACK", (int) duration, question, answer.length(), "knowledge-base", source, null);
+        log.info("[AI-QA] requestId={} 用户={} 问题={} 来源=本地知识库 耗时={}ms 命中数={}",
+                requestId, userId, truncate(question, 100), duration, hits.size());
         return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
     }
 
@@ -164,6 +171,8 @@ public class AiService {
             if (resp.body() == null || resp.body().isBlank()) {
                 return Map.of();
             }
+            log.info("[AI-{}] 代理调用成功 路径={} 响应长度={}", method.toUpperCase(), pathWithQuery,
+                    resp.body().length());
             return objectMapper.readValue(resp.body(), Object.class);
         } catch (com.zyyqq.desk.common.BizException e) {
             throw e;
@@ -272,6 +281,131 @@ public class AiService {
         } catch (Exception e) {
             // 记录失败不影响主流程
             log.warn("AI 日志写入失败", e);
+        }
+    }
+
+    /**
+     * 流式问答：调用 FastAPI 的 /api/ai/chat/stream 端点，逐段回调 delta 文本。
+     * 完成后回调 done（含 source/model/session_id/duration_ms）。
+     */
+    public void chatStream(Map<String, Object> body, StreamCallback callback) throws Exception {
+        String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
+        String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
+        Object userId = body.get("user_id");
+        String requestId = UUID.randomUUID().toString().replace("-", "");
+        long start = System.currentTimeMillis();
+
+        if (question == null || question.isBlank()) {
+            callback.onDelta("请输入您的问题");
+            callback.onDone("无", true, null, null, (int) (System.currentTimeMillis() - start));
+            return;
+        }
+
+        // 本地知识库检索作为上下文
+        List<KnowledgeArticle> hits = articleRepository.search(question.trim(), 5);
+        if (hits.isEmpty()) {
+            hits = fuzzySearch(question.trim());
+        }
+
+        AppProperties.AiService aiService = props.getAiService();
+        if (aiService.getBaseUrl() == null || aiService.getBaseUrl().isBlank()) {
+            // 无 AI 服务，直接本地降级（一次性返回）
+            String answer = buildFallbackAnswer(question, hits);
+            String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
+            callback.onDelta(answer);
+            callback.onDone(source, true, null, null, (int) (System.currentTimeMillis() - start));
+            saveLog(requestId, "QA", "FALLBACK", (int) (System.currentTimeMillis() - start), question,
+                    answer.length(), "knowledge-base", source, null);
+            log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 本地降级 命中={}",
+                    requestId, userId, truncate(question, 100), hits.size());
+            return;
+        }
+
+        // 组装 payload
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("question", question);
+        payload.put("knowledge", knowledgePayload(hits));
+        if (sessionId != null && !sessionId.isBlank()) {
+            payload.put("session_id", sessionId);
+        }
+        if (userId != null) {
+            payload.put("user_id", userId);
+        }
+
+        String url = aiService.getBaseUrl().replaceAll("/+$", "") + "/api/ai/chat/stream";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(aiService.getTimeoutSeconds() + 30))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .build();
+
+        StringBuilder answerBuf = new StringBuilder();
+        String[] sourceRef = {"模型生成"};
+        boolean[] fallbackRef = {false};
+        String[] modelRef = {null};
+        String[] sidRef = {null};
+        Integer[] durationRef = {null};
+
+        try {
+            HttpResponse<java.io.InputStream> resp = httpClient.send(req,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (resp.statusCode() != 200) {
+                throw new IllegalStateException("AI 服务返回 " + resp.statusCode());
+            }
+            try (var reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(resp.body(), java.nio.charset.StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.startsWith("data: ")) {
+                        continue;
+                    }
+                    String json = line.substring(6).trim();
+                    if (json.isEmpty()) {
+                        continue;
+                    }
+                    JsonNode node = objectMapper.readTree(json);
+                    String event = node.path("event").asText();
+                    if ("delta".equals(event)) {
+                        String piece = node.path("data").asText();
+                        if (piece != null && !piece.isEmpty()) {
+                            answerBuf.append(piece);
+                            callback.onDelta(piece);
+                        }
+                    } else if ("done".equals(event)) {
+                        sourceRef[0] = node.path("source").asText("模型生成");
+                        fallbackRef[0] = node.path("fallback").asBoolean(false);
+                        modelRef[0] = node.path("model").asText(null);
+                        sidRef[0] = node.path("session_id").asText(null);
+                        durationRef[0] = node.path("duration_ms").asInt(0);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // 流式失败，降级本地
+            String answer = buildFallbackAnswer(question, hits);
+            String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
+            answerBuf.setLength(0);
+            answerBuf.append(answer);
+            sourceRef[0] = source;
+            fallbackRef[0] = true;
+            callback.onDelta(answer);
+            log.warn("流式调用失败，降级本地：{}", e.getMessage());
+        }
+
+        long duration = System.currentTimeMillis() - start;
+        callback.onDone(sourceRef[0], fallbackRef[0], modelRef[0], sidRef[0], (int) duration);
+        saveLog(requestId, "QA", fallbackRef[0] ? "FALLBACK" : "SUCCESS", (int) duration, question,
+                answerBuf.length(), fallbackRef[0] ? "knowledge-base" : modelRef[0], sourceRef[0], null);
+        log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 来源={} 耗时={}ms 回答长度={}",
+                requestId, userId, truncate(question, 100), sourceRef[0], duration, answerBuf.length());
+    }
+
+    /** 流式回调接口 */
+    @FunctionalInterface
+    public interface StreamCallback {
+        void onDelta(String delta) throws Exception;
+        default void onDone(String source, boolean fallback, String model, String sessionId, int durationMs) throws Exception {
         }
     }
 

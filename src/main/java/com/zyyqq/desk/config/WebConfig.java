@@ -1,5 +1,6 @@
 package com.zyyqq.desk.config;
 
+import com.zyyqq.desk.security.AuditLogInterceptor;
 import com.zyyqq.desk.security.AuthInterceptor;
 import com.zyyqq.desk.security.RateLimitInterceptor;
 import org.springframework.context.annotation.Configuration;
@@ -20,10 +21,13 @@ public class WebConfig implements WebMvcConfigurer {
 
     private final AuthInterceptor authInterceptor;
     private final RateLimitInterceptor rateLimitInterceptor;
+    private final AuditLogInterceptor auditLogInterceptor;
 
-    public WebConfig(AuthInterceptor authInterceptor, RateLimitInterceptor rateLimitInterceptor) {
+    public WebConfig(AuthInterceptor authInterceptor, RateLimitInterceptor rateLimitInterceptor,
+                     AuditLogInterceptor auditLogInterceptor) {
         this.authInterceptor = authInterceptor;
         this.rateLimitInterceptor = rateLimitInterceptor;
+        this.auditLogInterceptor = auditLogInterceptor;
     }
 
     @Override
@@ -32,6 +36,10 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addInterceptor(rateLimitInterceptor)
                 .addPathPatterns("/api/auth/login");
         registry.addInterceptor(authInterceptor)
+                .addPathPatterns("/api/**")
+                .excludePathPatterns("/api/auth/login", "/api/auth/register");
+        // 操作审计日志：注册在认证之后，保证 afterCompletion 时 AuthContext 仍可读取用户
+        registry.addInterceptor(auditLogInterceptor)
                 .addPathPatterns("/api/**")
                 .excludePathPatterns("/api/auth/login", "/api/auth/register");
         // AI 限流在认证之后（需要用户身份）
