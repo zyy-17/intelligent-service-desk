@@ -26,6 +26,8 @@ class ErrorDetail(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000, description="用户问题")
     knowledge: List[KnowledgeItem] = Field(default_factory=list, description="Java 传入的知识库上下文")
+    session_id: Optional[str] = Field(None, description="会话 ID，传入则自动记录会话消息")
+    user_id: Optional[int] = Field(None, description="用户 ID（会话归属）")
 
 
 class ChatResponse(BaseModel):
@@ -36,6 +38,7 @@ class ChatResponse(BaseModel):
     references: List[KnowledgeItem] = Field(default_factory=list, description="引用的知识")
     fallback: bool = Field(..., description="是否降级")
     model: Optional[str] = None
+    session_id: Optional[str] = Field(None, description="本轮问答归属的会话 ID")
     error: Optional[ErrorDetail] = None
 
 
@@ -105,3 +108,31 @@ class SearchResponse(BaseModel):
     task_type: str = "SEARCH"
     results: List[KnowledgeItem]
     error: Optional[ErrorDetail] = None
+
+
+# ===== 会话管理 =====
+
+class SessionCreateRequest(BaseModel):
+    user_id: int = Field(..., description="用户 ID")
+    title: str = Field("新会话", max_length=100, description="会话标题")
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    ts: Optional[float] = None
+
+
+class SessionDetail(BaseModel):
+    session_id: str
+    title: str
+    created_at: float
+    messages: List[ChatMessage]
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    title: str
+    preview: str = ""
+    created_at: float
+    updated_at: float

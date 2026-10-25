@@ -181,6 +181,7 @@ const isStaff = computed(() => ['ADMIN', 'SUPERVISOR', 'AGENT'].includes(auth.ro
 const isCustomer = computed(() => auth.role === 'CUSTOMER')
 
 const query = reactive({ keyword: '', status: '', page: 1, pageSize: 10 })
+let createRequestId = ''
 const rows = ref([])
 const total = ref(0)
 const loading = ref(false)
@@ -242,7 +243,10 @@ async function doCreate() {
     ElMessage.warning('请填写主题和描述')
     return
   }
-  const r = await api.post('/tickets', createForm)
+  // 幂等标识：防止重复点击/网络重试导致重复建单
+  if (!createRequestId) createRequestId = crypto.randomUUID()
+  const r = await api.post('/tickets', createForm, { headers: { 'Idempotency-Key': createRequestId } })
+  createRequestId = ''
   ElMessage.success(`工单创建成功，编号 ${r.ticketNo}`)
   createVisible.value = false
   load()
@@ -311,7 +315,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.tickets { display: flex; flex-direction: column; gap: 16px; }
+.tickets { display: flex; flex-direction: column; gap: 16px; max-width: 1400px; margin: 0 auto; width: 100%; }
 .toolbar { padding: 16px; display: flex; align-items: center; justify-content: space-between; }
 .filters { display: flex; gap: 12px; align-items: center; }
 .table-panel { padding: 16px; }

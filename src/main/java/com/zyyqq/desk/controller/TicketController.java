@@ -1,7 +1,10 @@
 package com.zyyqq.desk.controller;
 
 import com.zyyqq.desk.common.ApiResponse;
+import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.common.PageResult;
+import com.zyyqq.desk.security.AuthContext;
+import com.zyyqq.desk.service.RedisSupport;
 import com.zyyqq.desk.service.TicketService;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +16,11 @@ import java.util.Map;
 public class TicketController {
 
     private final TicketService ticketService;
+    private final RedisSupport redisSupport;
 
-    public TicketController(TicketService ticketService) {
+    public TicketController(TicketService ticketService, RedisSupport redisSupport) {
         this.ticketService = ticketService;
+        this.redisSupport = redisSupport;
     }
 
     @GetMapping
@@ -33,7 +38,16 @@ public class TicketController {
     }
 
     @PostMapping
-    public ApiResponse<Map<String, Object>> create(@RequestBody Map<String, Object> body) {
+    public ApiResponse<Map<String, Object>> create(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        // 工单重复提交控制：客户端重复点击/网络重试时凭唯一请求标识去重
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            String requestKey = AuthContext.require().id() + ":" + idempotencyKey;
+            if (!redisSupport.tryIdempotent("ticket:" + requestKey, java.time.Duration.ofMinutes(10))) {
+                throw new BizException(409, "工单正在提交中，请勿重复提交");
+            }
+        }
         return ApiResponse.ok(ticketService.create(
                 str(body.get("title")), str(body.get("description")),
                 body.get("categoryId") == null ? null : Long.valueOf(String.valueOf(body.get("categoryId"))),

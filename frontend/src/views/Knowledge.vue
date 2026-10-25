@@ -169,7 +169,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.knowledge { display: flex; flex-direction: column; gap: 16px; }
+.knowledge { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .toolbar { padding: 16px; display: flex; align-items: center; justify-content: space-between; }
 .filters { display: flex; gap: 12px; }
 .kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }

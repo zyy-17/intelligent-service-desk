@@ -44,7 +44,10 @@ public class AiService {
         this.jdbc = jdbc;
     }
 
-    public Map<String, Object> chat(String question) {
+    public Map<String, Object> chat(Map<String, Object> body) {
+        String question = body.get("question") == null ? "" : String.valueOf(body.get("question"));
+        String sessionId = body.get("session_id") == null ? null : String.valueOf(body.get("session_id"));
+        Object userId = body.get("user_id");
         String requestId = UUID.randomUUID().toString().replace("-", "");
         long start = System.currentTimeMillis();
         if (question == null || question.isBlank()) {
@@ -61,7 +64,7 @@ public class AiService {
         AppProperties.AiService aiService = props.getAiService();
         if (aiService.getBaseUrl() != null && !aiService.getBaseUrl().isBlank()) {
             try {
-                Map<String, Object> result = callFastApi(question, hits, aiService);
+                Map<String, Object> result = callFastApi(question, sessionId, userId, hits, aiService);
                 long duration = System.currentTimeMillis() - start;
                 saveLog(requestId, "QA", "SUCCESS", (int) duration, question,
                         String.valueOf(result.get("answer")).length(),
@@ -86,11 +89,18 @@ public class AiService {
      * 调用 FastAPI AI 服务的 /api/ai/chat 接口。
      * 将本地检索到的知识作为 knowledge 上下文传给 AI 服务，由其完成模型调用与增强生成。
      */
-    private Map<String, Object> callFastApi(String question, List<KnowledgeArticle> hits,
+    private Map<String, Object> callFastApi(String question, String sessionId, Object userId,
+                                            List<KnowledgeArticle> hits,
                                             AppProperties.AiService aiService) throws Exception {
         Map<String, Object> payload = new HashMap<>();
         payload.put("question", question);
         payload.put("knowledge", knowledgePayload(hits));
+        if (sessionId != null && !sessionId.isBlank()) {
+            payload.put("session_id", sessionId);
+        }
+        if (userId != null) {
+            payload.put("user_id", userId);
+        }
 
         String url = aiService.getBaseUrl().replaceAll("/+$", "") + "/api/ai/chat";
         HttpRequest req = HttpRequest.newBuilder()
@@ -111,6 +121,7 @@ public class AiService {
         String source = root.path("source").asText();
         boolean fallback = root.path("fallback").asBoolean(false);
         String model = root.path("model").asText(null);
+        String respSessionId = root.path("session_id").asText(null);
         Map<String, Object> result = new HashMap<>();
         result.put("answer", answer.trim());
         result.put("source", source == null || source.isBlank() ? "模型生成" : source);
@@ -118,8 +129,48 @@ public class AiService {
         if (model != null && !model.isBlank()) {
             result.put("model", model);
         }
+        if (respSessionId != null && !respSessionId.isBlank()) {
+            result.put("session_id", respSessionId);
+        }
         result.put("references", brief(hits));
         return result;
+    }
+
+    /**
+     * 通用代理：把会话管理请求转发给 FastAPI AI 服务。
+     * AI 服务不可用时抛出异常，由全局异常处理返回提示。
+     */
+    public Object proxy(String method, String pathWithQuery, Map<String, Object> body) {
+        AppProperties.AiService aiService = props.getAiService();
+        if (aiService.getBaseUrl() == null || aiService.getBaseUrl().isBlank()) {
+            throw new com.zyyqq.desk.common.BizException("AI 服务未配置");
+        }
+        try {
+            String url = aiService.getBaseUrl().replaceAll("/+$", "") + pathWithQuery;
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(aiService.getTimeoutSeconds()))
+                    .header("Content-Type", "application/json");
+            if ("GET".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method)) {
+                builder.method(method.toUpperCase(), HttpRequest.BodyPublishers.noBody());
+            } else {
+                builder.method(method.toUpperCase(),
+                        HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body == null ? Map.of() : body)));
+            }
+            HttpResponse<String> resp = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() / 100 != 2) {
+                throw new com.zyyqq.desk.common.BizException("AI 服务返回 " + resp.statusCode());
+            }
+            if (resp.body() == null || resp.body().isBlank()) {
+                return Map.of();
+            }
+            return objectMapper.readValue(resp.body(), Object.class);
+        } catch (com.zyyqq.desk.common.BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("AI 服务代理调用失败({} {})：{}", method, pathWithQuery, e.getMessage());
+            throw new com.zyyqq.desk.common.BizException("AI 服务暂时不可用，请确认已启动 ai-service");
+        }
     }
 
     private List<Map<String, Object>> knowledgePayload(List<KnowledgeArticle> hits) {

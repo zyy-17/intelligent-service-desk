@@ -1,10 +1,12 @@
 package com.zyyqq.desk.service;
 
+import com.zyyqq.desk.config.AppProperties;
 import com.zyyqq.desk.repository.StatsRepository;
 import com.zyyqq.desk.repository.TicketRepository;
 import com.zyyqq.desk.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,14 +17,26 @@ public class StatsService {
     private final StatsRepository statsRepository;
     private final TicketRepository ticketRepository;
     private final UserRepository userRepository;
+    private final RedisSupport redisSupport;
+    private final AppProperties props;
 
-    public StatsService(StatsRepository statsRepository, TicketRepository ticketRepository, UserRepository userRepository) {
+    public StatsService(StatsRepository statsRepository, TicketRepository ticketRepository,
+                        UserRepository userRepository, RedisSupport redisSupport, AppProperties props) {
         this.statsRepository = statsRepository;
         this.ticketRepository = ticketRepository;
         this.userRepository = userRepository;
+        this.redisSupport = redisSupport;
+        this.props = props;
     }
 
     public Map<String, Object> overview() {
+        // 首页统计热点缓存：短 TTL，Redis 不可用时直接回源 MySQL
+        return redisSupport.cacheJson("stats_overview", Map.class,
+                Duration.ofSeconds(props.getRedis().getStatsOverviewTtl()),
+                this::loadOverview);
+    }
+
+    private Map<String, Object> loadOverview() {
         Map<String, Object> data = new HashMap<>();
         long total = ticketRepository.countAll();
         long pending = ticketRepository.countByStatus("PENDING") + ticketRepository.countByStatus("ASSIGNED");

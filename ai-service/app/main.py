@@ -6,13 +6,15 @@ Java 业务后端作为主控方，通过 HTTP 调用本服务。
 import logging
 import uuid
 import time
+from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .llm import chat_completion, is_configured, LLMError
 from .retrieval import search_knowledge, build_context, SYSTEM_PROMPT
+from .sessions import store
 from .schemas import (
     ChatRequest,
     ChatResponse,
@@ -24,6 +26,9 @@ from .schemas import (
     DraftResponse,
     SearchRequest,
     SearchResponse,
+    SessionCreateRequest,
+    SessionDetail,
+    SessionSummary,
     ErrorDetail,
 )
 
@@ -51,12 +56,12 @@ def _task_id() -> str:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_configured": is_configured()}
+    return {"status": "ok", "model_configured": is_configured(), "redis": store.redis_available}
 
 
 @app.post("/api/ai/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    """智能问答：优先云端模型（RAG），失败降级为知识检索。"""
+    """智能问答：优先云端模型（RAG），失败降级为知识检索。支持会话记录。"""
     task_id = _task_id()
     question = req.question.strip()
 
@@ -67,12 +72,16 @@ def chat(req: ChatRequest):
     if is_configured():
         try:
             ctx = build_context(hits)
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"知识库参考：\n{ctx or '（无相关知识）'}\n\n用户问题：{question}"},
-            ]
+            history = _recent_history(req.session_id, req.user_id)
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            messages.extend(history)
+            messages.append({
+                "role": "user",
+                "content": f"知识库参考：\n{ctx or '（无相关知识）'}\n\n用户问题：{question}",
+            })
             answer = chat_completion(messages)
             source = hits[0].title if hits else "模型生成"
+            sid = _record_session(req, question, answer)
             return ChatResponse(
                 task_id=task_id,
                 answer=answer,
@@ -80,19 +89,88 @@ def chat(req: ChatRequest):
                 references=hits,
                 fallback=False,
                 model=settings.ai_model,
+                session_id=sid,
             )
         except LLMError as e:
             logger.warning("云端模型调用失败，降级为知识检索：%s", e.message)
 
     # 3. 降级：知识检索
     answer = _fallback_answer(question, hits)
+    sid = _record_session(req, question, answer)
     return ChatResponse(
         task_id=task_id,
         answer=answer,
         source=hits[0].title if hits else "未找到匹配知识",
         references=hits,
         fallback=True,
+        session_id=sid,
     )
+
+
+def _recent_history(session_id: Optional[str], user_id: Optional[int]):
+    """取会话最近若干条消息作为多轮上下文。"""
+    if not session_id or not user_id:
+        return []
+    try:
+        data = store.get(session_id, user_id)
+        if not data:
+            return []
+        history = []
+        for m in data["messages"][-8:]:
+            history.append({"role": m["role"], "content": m["content"]})
+        return history
+    except Exception as e:
+        logger.warning("读取会话历史失败：%s", e)
+        return []
+
+
+def _record_session(req: ChatRequest, question: str, answer: str) -> Optional[str]:
+    """把一轮问答写入会话（会话不存在时自动创建），返回会话 ID。"""
+    if not req.user_id:
+        return None
+    try:
+        sid = req.session_id
+        if sid:
+            ok = store.append_message(sid, req.user_id, "user", question)
+            if not ok:
+                sid = None  # 会话不存在（如已被删除），自动新建
+        if not sid:
+            created = store.create(req.user_id)
+            sid = created["session_id"]
+        store.append_message(sid, req.user_id, "user", question)
+        store.rename_if_first(sid, req.user_id)
+        store.append_message(sid, req.user_id, "assistant", answer)
+        return sid
+    except Exception as e:
+        logger.warning("会话写入失败：%s", e)
+        return None
+
+
+# ===== 会话管理 =====
+
+@app.post("/api/ai/sessions")
+def create_session(req: SessionCreateRequest):
+    return store.create(req.user_id, req.title)
+
+
+@app.get("/api/ai/sessions", response_model=List[SessionSummary])
+def list_sessions(user_id: int, limit: int = 50):
+    return store.list(user_id, limit)
+
+
+@app.get("/api/ai/sessions/{session_id}", response_model=SessionDetail)
+def get_session(session_id: str, user_id: int):
+    data = store.get(session_id, user_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+    return data
+
+
+@app.delete("/api/ai/sessions/{session_id}")
+def delete_session(session_id: str, user_id: int):
+    if not store.delete(session_id, user_id):
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+    return {"deleted": True}
 
 
 @app.post("/api/ai/summarize", response_model=SummaryResponse)

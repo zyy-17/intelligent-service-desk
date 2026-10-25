@@ -2,6 +2,7 @@ package com.zyyqq.desk.service;
 
 import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.common.PageResult;
+import com.zyyqq.desk.config.AppProperties;
 import com.zyyqq.desk.entity.KnowledgeArticle;
 import com.zyyqq.desk.entity.KnowledgeCategory;
 import com.zyyqq.desk.repository.KnowledgeArticleRepository;
@@ -9,6 +10,7 @@ import com.zyyqq.desk.repository.KnowledgeCategoryRepository;
 import com.zyyqq.desk.security.AuthContext;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,14 +20,21 @@ public class KnowledgeService {
 
     private final KnowledgeArticleRepository articleRepository;
     private final KnowledgeCategoryRepository categoryRepository;
+    private final RedisSupport redisSupport;
+    private final AppProperties props;
 
-    public KnowledgeService(KnowledgeArticleRepository articleRepository, KnowledgeCategoryRepository categoryRepository) {
+    public KnowledgeService(KnowledgeArticleRepository articleRepository, KnowledgeCategoryRepository categoryRepository,
+                            RedisSupport redisSupport, AppProperties props) {
         this.articleRepository = articleRepository;
         this.categoryRepository = categoryRepository;
+        this.redisSupport = redisSupport;
+        this.props = props;
     }
 
     public List<KnowledgeCategory> categories() {
-        return categoryRepository.findAllOrdered();
+        return redisSupport.cacheJson("knowledge_categories", List.class,
+                Duration.ofSeconds(props.getRedis().getCategoriesTtl()),
+                categoryRepository::findAllOrdered);
     }
 
     public PageResult<KnowledgeArticle> list(int page, int pageSize, String keyword) {
@@ -53,7 +62,9 @@ public class KnowledgeService {
     }
 
     public List<KnowledgeArticle> hot(int limit) {
-        return articleRepository.findHot(limit);
+        return redisSupport.cacheJson("hot_articles_" + limit, List.class,
+                Duration.ofSeconds(props.getRedis().getHotArticlesTtl()),
+                () -> articleRepository.findHot(limit));
     }
 
     public List<KnowledgeArticle> search(String kw, int limit) {
@@ -86,11 +97,15 @@ public class KnowledgeService {
             a.setCreatedAt(java.time.LocalDateTime.now());
         }
         a.setUpdatedAt(java.time.LocalDateTime.now());
-        return articleRepository.save(a);
+        KnowledgeArticle saved = articleRepository.save(a);
+        // 知识数据变更 → 主动失效相关缓存（缓存一致性管理）
+        redisSupport.evictCache("hot_articles_6", "hot_articles_5", "hot_articles_10", "knowledge_categories");
+        return saved;
     }
 
     public void delete(Long id) {
         articleRepository.deleteById(id);
+        redisSupport.evictCache("hot_articles_6", "hot_articles_5", "hot_articles_10", "knowledge_categories");
     }
 
     public Map<String, Object> stats() {

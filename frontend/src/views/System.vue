@@ -194,7 +194,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.system { display: flex; flex-direction: column; gap: 16px; }
+.system { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .toolbar { padding: 16px; margin-bottom: 16px; }
 .table-panel { padding: 16px; }
 .cat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }

@@ -86,7 +86,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.customers { display: flex; flex-direction: column; gap: 16px; }
+.customers { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .toolbar { padding: 16px; display: flex; gap: 12px; align-items: center; }
 .table-panel { padding: 16px; }
 .user-cell { display: flex; align-items: center; gap: 10px; }

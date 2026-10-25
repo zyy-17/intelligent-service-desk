@@ -119,7 +119,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.stats-page { display: flex; flex-direction: column; gap: 16px; }
+.stats-page { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; }
 .kpi-card { background: #fff; border-radius: 12px; padding: 18px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
 .kpi-value { font-size: 26px; font-weight: 700; }

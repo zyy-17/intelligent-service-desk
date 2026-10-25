@@ -1,6 +1,7 @@
 package com.zyyqq.desk.service;
 
 import com.zyyqq.desk.common.BizException;
+import com.zyyqq.desk.config.AppProperties;
 import com.zyyqq.desk.entity.User;
 import com.zyyqq.desk.repository.UserRepository;
 import com.zyyqq.desk.security.JwtUtil;
@@ -20,14 +21,26 @@ public class AuthService {
     private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
     private final JdbcTemplate jdbc;
+    private final RedisSupport redisSupport;
+    private final AppProperties props;
 
-    public AuthService(UserRepository userRepository, JwtUtil jwtUtil, JdbcTemplate jdbc) {
+    public AuthService(UserRepository userRepository, JwtUtil jwtUtil, JdbcTemplate jdbc,
+                       RedisSupport redisSupport, AppProperties props) {
         this.userRepository = userRepository;
         this.jwtUtil = jwtUtil;
         this.jdbc = jdbc;
+        this.redisSupport = redisSupport;
+        this.props = props;
     }
 
     public Map<String, Object> login(String username, String password) {
+        // 登录安全：短时间内连续失败达到阈值则锁定（Redis 计数；Redis 不可用时降级放行并记录日志）
+        AppProperties.Redis rc = props.getRedis();
+        long failures = redisSupport.recordLoginFailure(username, rc.getLoginFailWindowSeconds());
+        if (failures > rc.getLoginMaxFailures()) {
+            throw new com.zyyqq.desk.common.BizException(429,
+                    "登录失败次数过多，账号已临时锁定，请 " + (rc.getLoginFailWindowSeconds() / 60) + " 分钟后再试");
+        }
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> BizException.unauthorized("账号或密码错误"));
         if (user.getStatus() != null && user.getStatus() == 0) {
@@ -36,6 +49,7 @@ public class AuthService {
         if (!PasswordUtil.verify(password, user.getPasswordHash())) {
             throw BizException.unauthorized("账号或密码错误");
         }
+        redisSupport.clearLoginFailures(username);
         jdbc.update("UPDATE sys_user SET last_login_at = ? WHERE id = ?", LocalDateTime.now(), user.getId());
         String token = jwtUtil.create(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole(), user.getStatus());
 
@@ -65,6 +79,9 @@ public class AuthService {
         user.setPasswordHash(PasswordUtil.hash(password));
         user.setDisplayName(displayName == null || displayName.isBlank() ? username : displayName);
         user.setRole(role);
+        // 默认头像：无图片，前端用「昵称首字 + 随机底色」渲染
+        String[] palette = {"#6366f1", "#3b82f6", "#22c55e", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4", "#ef4444"};
+        user.setAvatarColor(palette[java.util.concurrent.ThreadLocalRandom.current().nextInt(palette.length)]);
         user.setEmail(email);
         user.setStatus(1);
         user.setCreatedAt(LocalDateTime.now());

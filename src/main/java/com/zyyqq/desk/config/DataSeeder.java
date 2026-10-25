@@ -28,12 +28,13 @@ public class DataSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user", Long.class);
-        if (count != null && count > 0) {
+        if (count == null || count == 0) {
+            seed();
+            log.info("演示数据初始化完成");
+        } else {
             log.info("已存在用户数据，跳过演示数据初始化");
-            return;
         }
-        seed();
-        log.info("演示数据初始化完成");
+        ensureKnowledge();
     }
 
     private void seed() {
@@ -112,7 +113,50 @@ public class DataSeeder implements CommandLineRunner {
     }
 
     private void seedKnowledge(long[] kcats, long adminId) {
-        Object[][] articles = {
+        seedKnowledgeArticles(kcats, adminId, baseArticles(kcats));
+    }
+
+    /**
+     * 知识库补充：无论库中是否已有数据，按标题判重后补充新文章（幂等，可重复执行）。
+     */
+    private void ensureKnowledge() {
+        try {
+            Long kcatCount = jdbc.queryForObject("SELECT COUNT(*) FROM knowledge_category", Long.class);
+            if (kcatCount == null || kcatCount == 0) {
+                return; // 空库时由 seed() 统一初始化
+            }
+            long kcGuide = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='使用指南'", Long.class);
+            long kcFaq = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='常见问题'", Long.class);
+            long kcAccount = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='账号安全'", Long.class);
+            long kcBilling = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='账单与退款'", Long.class);
+            seedKnowledgeArticles(new long[]{kcGuide, kcFaq, kcAccount, kcBilling},
+                    jdbc.queryForObject("SELECT id FROM sys_user WHERE role='ADMIN' ORDER BY id LIMIT 1", Long.class),
+                    extraArticles(new long[]{kcGuide, kcFaq, kcAccount, kcBilling}));
+            log.info("知识库补充检查完成");
+        } catch (Exception e) {
+            log.warn("知识库补充失败（不影响启动）：{}", e.getMessage());
+        }
+    }
+
+    private void seedKnowledgeArticles(long[] kcats, long adminId, Object[][] articles) {
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        Random rnd = new Random(42);
+        for (Object[] a : articles) {
+            Integer exists = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM knowledge_article WHERE title = ?", Integer.class, a[0]);
+            if (exists != null && exists > 0) {
+                continue;
+            }
+            String published = LocalDateTime.now().minusDays(rnd.nextInt(60)).format(fmt);
+            int views = 50 + rnd.nextInt(3000);
+            jdbc.update("INSERT INTO knowledge_article(title,summary,body,category_id,keywords,status,author_id,view_count,published_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                    a[0], a[1], a[2], a[4], a[3], "PUBLISHED", adminId, views, published);
+        }
+    }
+
+    private Object[][] baseArticles(long[] kcats) {
+        return new Object[][]{
                 {"如何重置登录密码", "忘记密码时可通过注册邮箱或手机号自助重置，本文说明操作步骤。",
                         "**操作步骤**\n\n1. 打开登录页，点击「忘记密码」。\n2. 输入注册时的手机号或邮箱，获取验证码。\n3. 验证通过后设置新密码（至少 8 位，含字母和数字）。\n4. 使用新密码登录。\n\n> 若无法收到验证码，请联系人工客服协助处理。",
                         "密码,重置,登录,忘记", kcats[2]},
@@ -144,15 +188,71 @@ public class DataSeeder implements CommandLineRunner {
                         "**接入步骤**\n\n1. 在「开发者中心」创建应用获取 AppKey。\n2. 阅读接口文档。\n3. 使用签名方式调用接口。",
                         "API,接入,开发,AppKey", kcats[0]},
         };
-        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        Random rnd = new Random(42);
-        for (Object[] a : articles) {
-            String published = LocalDateTime.now().minusDays(rnd.nextInt(60)).format(fmt);
-            int views = 50 + rnd.nextInt(3000);
-            jdbc.update("INSERT INTO knowledge_article(title,summary,body,category_id,keywords,status,author_id,view_count,published_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
-                    a[0], a[1], a[2], a[4], a[3], "PUBLISHED", adminId, views, published);
-        }
+    }
+
+    private Object[][] extraArticles(long[] kcats) {
+        return new Object[][]{
+                {"登录后频繁掉线怎么办", "Cookie/Token 过期或网络波动导致掉线的排查方法。",
+                        "**可能原因**\n\n1. 登录状态有效期已过，重新登录即可；\n2. 浏览器开启了「退出时清除 Cookie」；\n3. 公司网络代理导致会话不稳定。\n\n**建议**\n\n- 勾选登录页「记住账号」；\n- 将平台地址加入浏览器信任站点。",
+                        "掉线,登录状态,Cookie,过期", kcats[1]},
+                {"收不到短信验证码", "验证码未到达的常见原因与解决办法。",
+                        "**排查清单**\n\n1. 检查手机是否开启短信拦截；\n2. 确认信号正常，欠费停机会拦截短信；\n3. 验证码 60 秒后可重新发送，每日上限 10 条；\n4. 仍收不到请联系客服更换验证方式。",
+                        "验证码,短信,收不到,手机", kcats[1]},
+                {"如何修改绑定的手机号", "更换手机号的安全验证流程。",
+                        "**操作步骤**\n\n1. 进入「个人中心 - 安全设置」；\n2. 点击「更换手机号」；\n3. 通过旧手机号短信验证；\n4. 绑定新手机号。\n\n> 旧手机号不可用时，请提交工单并提供身份证明材料。",
+                        "手机号,更换,修改,绑定", kcats[2]},
+                {"账号被盗如何处理", "发现账号异常后的紧急处理步骤。",
+                        "**紧急处理**\n\n1. 立即修改密码并退出所有登录设备；\n2. 开启两步验证；\n3. 检查账单是否存在异常消费；\n4. 提交工单冻结账号。\n\n> 平台不会以任何形式索要您的密码和验证码。",
+                        "盗号,安全,冻结,异常", kcats[2]},
+                {"退款多久到账", "退款审核通过后的到账时间说明。",
+                        "**到账时间**\n\n- 支付宝/微信支付：1-3 个工作日原路退回；\n- 银行卡支付：3-7 个工作日；\n- 对公转账：5-10 个工作日。\n\n审核通过后可在「账单中心 - 退款记录」查看进度。",
+                        "退款,到账,时间,原路退回", kcats[3]},
+                {"如何下载发票", "电子发票的下载与报销使用说明。",
+                        "**下载步骤**\n\n1. 进入「账单中心 - 发票管理」；\n2. 找到已开具的发票，点击「下载」；\n3. 获取 PDF 版式文件，可用于报销。\n\n电子发票与纸质发票具有同等法律效力。",
+                        "发票,下载,报销,PDF", kcats[3]},
+                {"套餐到期不续费会怎样", "套餐到期后的服务状态说明。",
+                        "**到期规则**\n\n- 到期后进入 15 天宽限期，功能受限但数据保留；\n- 宽限期后数据保留 90 天，可随时续费恢复；\n- 超过 90 天未续费，数据将被清除且无法恢复。",
+                        "套餐,到期,续费,宽限期", kcats[3]},
+                {"如何创建子账号并分配权限", "企业管理员创建子账号与权限分配指南。",
+                        "**操作步骤**\n\n1. 管理员进入「系统管理 - 用户管理」；\n2. 点击「新增用户」，填写信息并选择角色；\n3. 按角色自动获得对应功能权限；\n4. 子账号首次登录建议修改密码。",
+                        "子账号,权限,角色,管理员", kcats[0]},
+                {"工单处理流程是怎样的", "从提交到关闭的完整工单生命周期。",
+                        "**流程说明**\n\n1. 提交工单 → 系统自动分类；\n2. 客服主管分配处理人；\n3. 客服接单并跟进处理；\n4. 给出解决方案，客户确认；\n5. 客户评价后工单关闭。\n\n每个环节都会收到站内通知。",
+                        "工单,流程,生命周期,处理", kcats[0]},
+                {"如何提高 AI 问答准确率", "让智能助手更准确回答的技巧。",
+                        "**使用技巧**\n\n1. 用具体关键词描述问题，如「导出 Excel 报表乱码」；\n2. 避免一句话包含多个问题；\n3. 可补充产品版本、报错截图文字等信息；\n4. AI 无法解答时会引导转人工。",
+                        "AI,问答,技巧,准确率", kcats[1]},
+                {"批量导入客户数据的方法", "使用 Excel 模板批量导入客户数据。",
+                        "**导入步骤**\n\n1. 进入「客户管理」点击「批量导入」；\n2. 下载标准模板并按格式填写；\n3. 上传文件，系统自动校验；\n4. 校验通过后确认导入。\n\n> 单次上限 5000 条，重复数据自动跳过。",
+                        "批量导入,客户,Excel,模板", kcats[0]},
+                {"消息通知如何设置", "站内通知与邮件通知的配置方法。",
+                        "**配置入口**\n\n「个人中心 - 通知设置」可选择：\n\n- 工单状态变更提醒；\n- 系统公告提醒；\n- 邮件通知开关。\n\n保存后立即生效。",
+                        "通知,提醒,邮件,设置", kcats[1]},
+                {"接口调用出现 429 限流怎么办", "API 调用触发限流的处理建议。",
+                        "**说明**\n\n为保障服务稳定，平台对 API 调用频率做了限制：\n\n- 登录接口：1 分钟内最多 10 次；\n- AI 问答：1 分钟内最多 20 次。\n\n收到 429 响应请稍后重试，避免高频轮询，建议使用 WebSocket 或轮询间隔不低于 5 秒。",
+                        "限流,429,API,频率", kcats[1]},
+                {"如何注销账号", "账号注销的条件与数据清除说明。",
+                        "**注销条件**\n\n- 账号无进行中的工单；\n- 无未结算账单；\n- 身份验证通过。\n\n提交注销申请后进入 15 天冷静期，期间登录可撤销。注销后所有数据将被永久删除。",
+                        "注销,账号,删除,冷静期", kcats[2]},
+                {"升级套餐后费用如何计算", "套餐升降级的费用折算规则。",
+                        "**计算规则**\n\n- 升级：差价按剩余天数折算，立即支付生效；\n- 降级：次月生效，当月按原套餐执行；\n- 具体金额在下单页实时预览。",
+                        "套餐,费用,折算,升级降级", kcats[3]},
+                {"数据安全与隐私保护说明", "平台的数据安全措施说明。",
+                        "**安全保障**\n\n1. 传输全程 TLS 加密；\n2. 密码采用 PBKDF2 单向哈希存储；\n3. 敏感操作全程审计日志；\n4. 数据每日异地备份。\n\n平台严格遵循个人信息保护相关法规。",
+                        "安全,隐私,加密,备份", kcats[2]},
+                {"工单被驳回怎么处理", "工单信息不完整被退回的处理方法。",
+                        "**处理方式**\n\n查看驳回原因（站内通知可查）：\n\n- 信息不全 → 编辑补充后重新提交；\n- 重复提交 → 等待原工单处理；\n- 类型错误 → 修改分类后重新提交。",
+                        "工单,驳回,重新提交", kcats[0]},
+                {"如何查看操作日志", "系统操作审计日志的查看方法。",
+                        "**查看入口**\n\n管理员进入「系统管理 - 操作日志」，可按：\n\n- 操作人；\n- 操作类型；\n- 时间范围。\n\n筛选查询，日志保留 180 天。",
+                        "日志,审计,操作记录", kcats[0]},
+                {"客服响应时间是多久", "不同渠道的响应时效说明。",
+                        "**响应时效**\n\n- 在线工单：平均 2 小时内响应，工作时间 9:00-21:00；\n- 紧急电话：7×24 小时；\n- 邮件：1 个工作日内回复。\n\n紧急问题建议电话 + 工单双渠道提交。",
+                        "响应时间,时效,客服,SLA", kcats[1]},
+                {"多设备同时登录会冲突吗", "多端登录策略说明。",
+                        "**登录策略**\n\n- 同一账号最多 3 台设备同时在线；\n- 网页端与移动端数据实时同步；\n- 异地登录会收到安全提醒。\n\n可在「安全设置 - 登录设备」中强制下线其他设备。",
+                        "多设备,登录,同步,下线", kcats[2]},
+        };
     }
 
     private void seedTickets(long adminId, long supId, long[] cats) {

@@ -91,7 +91,7 @@
         </div>
         <div class="ai-body">
           <div class="ai-bot">
-            <div class="bot-avatar">AI</div>
+            <img class="bot-avatar" :src="botAvatar" alt="AI" />
             <div class="bot-bubble">您好，我是智能客服助手，可以帮您解答常见问题。</div>
           </div>
           <el-input v-model="aiQuestion" placeholder="输入您的问题..." size="large" @keyup.enter="askAi">
@@ -145,6 +145,7 @@ import { useAuthStore } from '../store/auth'
 import api from '../api'
 import * as echarts from 'echarts'
 import { Promotion } from '@element-plus/icons-vue'
+import botAvatar from '../assets/ai-bot-avatar.png'
 
 const auth = useAuthStore()
 const overview = ref({})
@@ -346,8 +347,7 @@ onBeforeUnmount(() => {
 .ai-body { flex: 1; display: flex; flex-direction: column; gap: 12px; }
 .ai-bot { display: flex; gap: 10px; align-items: flex-start; }
 .bot-avatar {
-  width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;
+  width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
 }
 .bot-bubble {
   background: #f3f4f6; border-radius: 4px 12px 12px 12px; padding: 10px 12px;
