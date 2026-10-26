@@ -81,29 +81,72 @@ public class TicketService {
         return PageResult.of(rows, total, p, size);
     }
 
-    /** 工单详情（含消息与历史，客户无权看他人工单且过滤内部备注） */
+    /**
+     * 工单详情（含消息与历史，客户无权看他人工单且过滤内部备注）。
+     * 注意：联表扩展字段（客户信息/分类名/发送人等）必须用 JdbcTemplate 以 Map 返回——
+     * Spring Data JDBC 的实体映射会丢弃 @Transient 字段，导致详情页拿不到客户姓名、
+     * 分类名等信息，与列表页（JdbcTemplate）数据不一致。
+     */
     public Map<String, Object> detail(Long id) {
-        Ticket t = ticketRepository.findDetail(id)
+        Ticket t = ticketRepository.findById(id)
                 .orElseThrow(() -> BizException.notFound("工单不存在"));
         AuthContext.UserInfo u = AuthContext.require();
         if ("CUSTOMER".equals(u.role()) && !t.getCustomerId().equals(u.id())) {
             throw BizException.forbidden("无权访问该工单");
         }
-        // 客户不返回内部备注
-        List<TicketMessage> messages = messageRepository.findByTicket(id);
-        if ("CUSTOMER".equals(u.role())) {
-            messages = messages.stream().filter(m -> "PUBLIC".equals(m.getMessageType())).toList();
+        boolean isCustomer = "CUSTOMER".equals(u.role());
+        // 工单主体：与列表页同一套联表查询，保证详情与列表数据同源一致；附带客户头像字段供概览展示
+        Map<String, Object> ticket = jdbc.queryForList(
+                "SELECT t.*, cu.display_name AS customer_name, au.display_name AS assignee_name, " +
+                        "cu.phone AS customer_phone, cu.email AS customer_email, " +
+                        "cu.company AS customer_company, cu.department AS customer_department, " +
+                        "cu.avatar_url AS customer_avatar_url, cu.avatar_color AS customer_avatar_color, " +
+                        "c.name AS category_name, c.color AS category_color " +
+                        "FROM ticket t LEFT JOIN sys_user cu ON cu.id = t.customer_id " +
+                        "LEFT JOIN sys_user au ON au.id = t.assignee_id " +
+                        "LEFT JOIN ticket_category c ON c.id = t.category_id WHERE t.id = ?", id)
+                .stream().findFirst()
+                .orElseThrow(() -> BizException.notFound("工单不存在"));
+        // 消息：联表带发送人姓名/角色/头像，客户视角过滤内部备注
+        List<Map<String, Object>> messages = jdbc.queryForList(
+                "SELECT m.*, u.display_name AS sender_name, u.role AS sender_role, " +
+                        "u.avatar_color AS sender_avatar_color, u.avatar_url AS sender_avatar_url " +
+                        "FROM ticket_message m JOIN sys_user u ON u.id = m.sender_id " +
+                        "WHERE m.ticket_id = ? ORDER BY m.created_at ASC, m.id ASC", id);
+        if (isCustomer) {
+            messages = messages.stream()
+                    .filter(m -> "PUBLIC".equals(col(m, "message_type")))
+                    .toList();
         }
-        List<TicketHistory> histories = historyRepository.findByTicket(id);
+        // 历史：联表带操作人姓名，供时间线展示"谁做了什么"
+        List<Map<String, Object>> histories = jdbc.queryForList(
+                "SELECT h.*, u.display_name AS operator_name, u.role AS operator_role " +
+                        "FROM ticket_history h LEFT JOIN sys_user u ON u.id = h.operator_id " +
+                        "WHERE h.ticket_id = ? ORDER BY h.created_at ASC, h.id ASC", id);
+
         Map<String, Object> data = new HashMap<>();
-        data.put("ticket", t);
+        data.put("ticket", ticket);
         data.put("messages", messages);
         data.put("histories", histories);
         // 详情页左侧客户卡：历史工单数用于判定活跃度标签
         data.put("customerTicketCount", customerTicketCount(t.getCustomerId()));
         // 详情页右栏：按工单标题与分类匹配的推荐知识（带匹配度百分比）
-        data.put("relatedKnowledge", relatedKnowledge(t));
+        data.put("relatedKnowledge", relatedKnowledge(t.getTitle(), (String) col(ticket, "category_name")));
         return data;
+    }
+
+    /** 按列名取 Map 中的值（兼容大小写差异，MySQL 列名一般为小写） */
+    private static Object col(Map<String, Object> row, String name) {
+        Object v = row.get(name);
+        if (v != null) {
+            return v;
+        }
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(name)) {
+                return e.getValue();
+            }
+        }
+        return null;
     }
 
     /** 统计客户历史工单数（用于详情页客户活跃度标签） */
@@ -116,13 +159,13 @@ public class TicketService {
     }
 
     /** 按工单标题与分类检索相关文章，用 bigram 重合度换算匹配百分比（启发式，非语义向量） */
-    private List<Map<String, Object>> relatedKnowledge(Ticket t) {
+    private List<Map<String, Object>> relatedKnowledge(String title, String categoryName) {
         StringBuilder query = new StringBuilder();
-        if (t.getTitle() != null) {
-            query.append(t.getTitle()).append(' ');
+        if (title != null) {
+            query.append(title).append(' ');
         }
-        if (t.getCategoryName() != null) {
-            query.append(t.getCategoryName());
+        if (categoryName != null) {
+            query.append(categoryName);
         }
         Set<String> grams = bigrams(query.toString(), 24, 16);
         if (grams.isEmpty()) {

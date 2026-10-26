@@ -32,7 +32,8 @@
             <span class="tag" :class="'lv-' + customerLevel.key">{{ customerLevel.label }}</span>
           </header>
           <div class="cust-main">
-            <div class="cust-avatar" :style="{ background: avatarColor }">{{ (customerName || '?').charAt(0) }}</div>
+            <img v-if="customerAvatarUrl" class="cust-avatar" :src="customerAvatarUrl" :alt="customerName" />
+            <div v-else class="cust-avatar" :style="{ background: customerAvatarColor }">{{ (customerName || '?').charAt(0) }}</div>
             <div class="cust-info">
               <div class="cust-name">{{ customerName || '未知客户' }}</div>
               <div class="cust-sub">{{ customerOrg }}</div>
@@ -41,7 +42,7 @@
           <ul class="kv-list">
             <li>
               <span class="k">联系电话</span>
-              <span class="v mono" :title="customerPhone || '未填写'">{{ maskPhone(customerPhone) }}</span>
+              <span class="v mono" :title="customerPhone || '未填写'">{{ displayPhone }}</span>
             </li>
             <li>
               <span class="k">电子邮箱</span>
@@ -103,6 +104,14 @@
               <span class="v mono">{{ ticketNo }}</span>
             </li>
             <li>
+              <span class="k">工单状态</span>
+              <span class="v"><span class="badge" :class="'st-' + status">{{ statusLabel }}</span></span>
+            </li>
+            <li>
+              <span class="k">优先级</span>
+              <span class="v"><span class="badge" :class="'pr-' + priority">{{ priorityLabel }}</span></span>
+            </li>
+            <li>
               <span class="k">工单分类</span>
               <span class="v">
                 <span class="cat" :style="{ color: categoryColor, borderColor: categoryColor }">{{ categoryName }}</span>
@@ -141,6 +150,14 @@
           </p>
         </header>
 
+        <!-- 问题描述 -->
+        <section class="desc-card">
+          <header class="card-head">
+            <h3>问题描述</h3>
+          </header>
+          <p class="desc-body">{{ val(ticket, 'description') || '暂无描述' }}</p>
+        </section>
+
         <!-- AI 摘要 -->
         <div class="ai-summary" v-if="isStaff">
           <div class="ais-head">
@@ -164,10 +181,11 @@
                 {{ item.content }} · {{ fmtShort(item.time) }}
               </span>
             </div>
-            <!-- 消息气泡 -->
-            <div class="tl-msg" v-else :class="{ note: item.kind === 'note', mine: item.kind === 'msg' && item.mine }">
-              <div class="tl-avatar" :style="{ background: item.kind === 'note' ? '#f59e0b' : (item.mine ? '#2563eb' : '#94a3b8') }">
-                {{ (item.sender || '?').charAt(0) }}
+            <!-- 消息气泡：我方消息头像在右，对方消息头像在左（客服端=客服右客户左，客户端自动反之） -->
+            <div class="tl-msg" v-else :class="{ note: item.kind === 'note', mine: item.mine }">
+              <div class="tl-avatar" :style="item.avatarUrl ? {} : { background: item.avatarColor }">
+                <img v-if="item.avatarUrl" class="tl-avatar-img" :src="item.avatarUrl" :alt="item.sender" />
+                <template v-else>{{ (item.sender || '?').charAt(0) }}</template>
               </div>
               <div class="tl-body">
                 <div class="tl-meta">
@@ -175,6 +193,7 @@
                   <span class="tl-role" v-if="item.kind === 'note'">内部备注</span>
                   <span class="tl-role public" v-else-if="item.mine && isStaff">公开回复</span>
                   <span class="tl-role" v-else-if="item.isCustomer && !item.mine">客户</span>
+                  <span class="tl-role" v-else-if="!item.mine">客服</span>
                   <span class="tl-time">{{ fmtShort(item.time) }}</span>
                 </div>
                 <div class="tl-bubble">{{ item.content }}</div>
@@ -390,7 +409,14 @@ const customerOrg = computed(() => {
   const parts = [customerCompany.value, customerDepartment.value].filter(Boolean)
   return parts.length ? parts.join(' · ') : '未填写所属公司'
 })
+const customerAvatarUrl = computed(() => val(ticket.value, 'customerAvatarUrl') || '')
+const customerAvatarColor = computed(() => val(ticket.value, 'customerAvatarColor') || avatarColor.value)
 const avatarColor = computed(() => categoryColor.value || '#6366f1')
+/* 客服端手机号脱敏（悬停看完整），客户端本人查看显示完整号码 */
+const displayPhone = computed(() => {
+  if (!customerPhone.value) return '未填写'
+  return isStaff.value ? maskPhone(customerPhone.value) : customerPhone.value
+})
 
 const statusMap = {
   PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '处理中',
@@ -460,12 +486,15 @@ const timeline = computed(() => {
   for (const m of detail.value?.messages || []) {
     const type = val(m, 'messageType')
     const senderId = val(m, 'senderId')
+    const mine = senderId === me.value.id
     items.push({
       kind: type === 'INTERNAL' ? 'note' : 'msg',
-      sender: val(m, 'senderName') || '用户',
+      sender: val(m, 'senderName') || (mine ? '我' : '用户'),
       senderRole: val(m, 'senderRole'),
       isCustomer: val(m, 'senderRole') === 'CUSTOMER',
-      mine: senderId === me.value.id,
+      mine,
+      avatarUrl: val(m, 'senderAvatarUrl'),
+      avatarColor: val(m, 'senderAvatarColor') || (type === 'INTERNAL' ? '#f59e0b' : (mine ? '#2563eb' : '#94a3b8')),
       time: val(m, 'createdAt'),
       content: m.content
     })
@@ -473,10 +502,13 @@ const timeline = computed(() => {
   for (const h of detail.value?.histories || []) {
     const action = val(h, 'action')
     const remark = val(h, 'remark')
+    const opName = val(h, 'operatorName')
+    const opRole = val(h, 'operatorRole')
+    const opLabel = opName ? `${opName}${opRole ? `（${opRole === 'CUSTOMER' ? '客户' : '客服'}）` : ''}` : ''
     items.push({
       kind: 'sys',
       time: val(h, 'createdAt'),
-      content: (actionMap[action] || action) + (remark ? `：${remark}` : '')
+      content: (opLabel ? opLabel + ' ' : '') + (actionMap[action] || action) + (remark ? `：${remark}` : '')
     })
   }
   return items.sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0))
@@ -812,6 +844,7 @@ onBeforeUnmount(() => {
   width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 17px; font-weight: 600;
+  object-fit: cover; border: 1px solid #e8eef5;
 }
 .cust-info { min-width: 0; }
 .cust-name { font-size: 14px; font-weight: 600; color: #0f172a; }
@@ -896,11 +929,15 @@ onBeforeUnmount(() => {
   padding: 3px 10px; border-radius: 999px;
 }
 .tl-msg { display: flex; gap: 9px; }
+.tl-msg.mine { flex-direction: row-reverse; }
+.tl-msg.mine .tl-time { margin-left: 0; margin-right: auto; }
 .tl-avatar {
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 12px; font-weight: 600;
+  overflow: hidden;
 }
+.tl-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .tl-body { min-width: 0; flex: 1; }
 .tl-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .tl-sender { font-size: 12px; font-weight: 600; color: #334155; }
@@ -916,10 +953,21 @@ onBeforeUnmount(() => {
   padding: 9px 12px; border-radius: 10px;
   white-space: pre-wrap; word-break: break-word;
 }
-.tl-msg.mine .tl-bubble { background: #2563eb; border-color: #2563eb; color: #fff; }
+.tl-msg.mine .tl-bubble { background: #2563eb; border-color: #2563eb; color: #fff; border-top-right-radius: 4px; }
 .tl-msg.mine .tl-meta .tl-sender { color: #1d4ed8; }
+.tl-msg:not(.mine):not(.note) .tl-bubble { border-top-left-radius: 4px; }
 .tl-msg.note .tl-bubble { background: #fffbeb; border-color: #fde68a; color: #78350f; }
 .tl-empty { text-align: center; font-size: 12px; color: #94a3b8; padding: 24px 0; }
+
+/* 问题描述卡 */
+.desc-card {
+  margin: 12px 16px 0; padding: 11px 13px;
+  background: #fcfdfe; border: 1px solid #e8eef5; border-radius: 10px;
+}
+.desc-body {
+  font-size: 12px; line-height: 1.75; color: #475569; margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 .reply-box { border-top: 1px solid #e2e8f0; padding: 10px 14px 12px; background: #fff; }
 .reply-tabs { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }

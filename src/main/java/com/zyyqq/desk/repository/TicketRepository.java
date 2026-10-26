@@ -41,20 +41,6 @@ public interface TicketRepository extends CrudRepository<Ticket, Long> {
     @Query("SELECT COUNT(*) FROM ticket WHERE priority = :priority")
     long countByPriority(@Param("priority") String priority);
 
-    /** 查询工单详情（联表带客户联系方式/公司部门，供详情页左侧客户卡展示） */
-    @Query("""
-            SELECT t.*, cu.display_name AS customer_name, au.display_name AS assignee_name,
-                   cu.phone AS customer_phone, cu.email AS customer_email,
-                   cu.company AS customer_company, cu.department AS customer_department,
-                   c.name AS category_name, c.color AS category_color
-            FROM ticket t
-            LEFT JOIN sys_user cu ON cu.id = t.customer_id
-            LEFT JOIN sys_user au ON au.id = t.assignee_id
-            LEFT JOIN ticket_category c ON c.id = t.category_id
-            WHERE t.id = :id
-            """)
-    Optional<Ticket> findDetail(@Param("id") Long id);
-
     /** 更新工单状态与处理人 */
     @Modifying
     @Query("UPDATE ticket SET status = :status, assignee_id = :assigneeId WHERE id = :id")
