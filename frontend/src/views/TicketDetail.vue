@@ -60,37 +60,26 @@
           </ul>
         </section>
 
-        <!-- 服务时效 SLA -->
+        <!-- 问题描述（原中栏，移至 SLA 位置） -->
+        <section class="card">
+          <header class="card-head">
+            <h3>问题描述</h3>
+          </header>
+          <p class="desc-body">{{ val(ticket, 'description') || '暂无描述' }}</p>
+        </section>
+
+        <!-- AI 智能摘要（仅客服可见，原中栏，移至 SLA 位置） -->
         <section class="card" v-if="isStaff">
           <header class="card-head">
-            <h3>服务时效 SLA</h3>
-            <span class="card-hint" v-if="isStaff">剩余 {{ slaText }}</span>
+            <h3>AI 智能摘要</h3>
+            <div class="head-tools">
+              <span class="card-hint" v-if="summaryFallback">本地摘要</span>
+              <button class="ais-refresh" :class="{ spin: summarizing }" @click="loadSummary" title="重新生成">
+                <el-icon><Refresh /></el-icon>
+              </button>
+            </div>
           </header>
-          <div class="sla-block">
-            <div class="sla-row">
-              <span class="sla-label">首次响应目标</span>
-              <span class="sla-val">{{ fmtTime(slaResponseAt) }}</span>
-            </div>
-            <div class="sla-row">
-              <span class="sla-label">首次响应时间</span>
-              <span class="sla-val" :class="{ dim: !firstResponseAt }">{{ firstResponseAt ? fmtTime(firstResponseAt) : '尚未响应' }}</span>
-            </div>
-            <div class="sla-row">
-              <span class="sla-label">解决目标时间</span>
-              <span class="sla-val">{{ fmtTime(slaResolveAt) }}</span>
-            </div>
-            <div class="sla-row">
-              <span class="sla-label">实际解决时间</span>
-              <span class="sla-val" :class="{ dim: !resolvedAt }">{{ resolvedAt ? fmtTime(resolvedAt) : '处理中' }}</span>
-            </div>
-            <div class="sla-bar">
-              <div class="sla-bar-fill" :class="'sla-' + slaLevel" :style="{ width: slaPercent + '%' }"></div>
-            </div>
-            <div class="sla-foot">
-              <span>已耗时 {{ elapsedText }}</span>
-              <span>重开 {{ reopenCount }} 次</span>
-            </div>
-          </div>
+          <p class="ais-body">{{ summaryText }}</p>
         </section>
 
         <!-- 工单属性 -->
@@ -150,28 +139,7 @@
           </p>
         </header>
 
-        <!-- 问题描述 -->
-        <section class="desc-card">
-          <header class="card-head">
-            <h3>问题描述</h3>
-          </header>
-          <p class="desc-body">{{ val(ticket, 'description') || '暂无描述' }}</p>
-        </section>
-
-        <!-- AI 摘要 -->
-        <div class="ai-summary" v-if="isStaff">
-          <div class="ais-head">
-            <el-icon class="ais-icon"><MagicStick /></el-icon>
-            <span>AI 智能摘要</span>
-            <span class="ais-badge" v-if="summaryFallback">本地摘要</span>
-            <button class="ais-refresh" :class="{ spin: summarizing }" @click="loadSummary" title="重新生成">
-              <el-icon><Refresh /></el-icon>
-            </button>
-          </div>
-          <p class="ais-body">{{ summaryText }}</p>
-        </div>
-
-        <!-- 时间线 -->
+        <!-- 时间线（中栏已腾出全部空间给消息区） -->
         <div class="timeline" ref="timelineRef">
           <template v-for="(item, idx) in timeline" :key="idx">
             <!-- 系统事件 -->
@@ -374,6 +342,7 @@ const timelineRef = ref(null)
 const now = ref(Date.now())
 
 let clockTimer = null
+let pollTimer = null
 
 /* 兼容后端两种命名：实体序列化为驼峰，JdbcTemplate 返回下划线 */
 const val = (obj, key) => {
@@ -398,11 +367,9 @@ const customerEmail = computed(() => val(ticket.value, 'customerEmail') || '')
 const customerCompany = computed(() => val(ticket.value, 'customerCompany') || '')
 const customerDepartment = computed(() => val(ticket.value, 'customerDepartment') || '')
 const satisfaction = computed(() => val(ticket.value, 'satisfaction') || 0)
-const reopenCount = computed(() => val(ticket.value, 'reopenCount') || 0)
 const createdAt = computed(() => val(ticket.value, 'createdAt'))
-const slaResponseAt = computed(() => val(ticket.value, 'slaResponseAt'))
+/* SLA 卡已删，仅保留「服务响应」行所需：解决目标时间 + 实际解决时间换算剩余/超时 */
 const slaResolveAt = computed(() => val(ticket.value, 'slaResolveAt'))
-const firstResponseAt = computed(() => val(ticket.value, 'firstResponseAt'))
 const resolvedAt = computed(() => val(ticket.value, 'resolvedAt'))
 
 const customerOrg = computed(() => {
@@ -461,18 +428,6 @@ const slaText = computed(() => {
   if (resolvedAt.value) return ms <= 0 ? '按时解决' : `提前 ${fmtDur(-ms)}`
   if (ms < 0) return `已超时 ${fmtDur(-ms)}`
   return fmtDur(ms)
-})
-const slaPercent = computed(() => {
-  const start = createdAt.value ? new Date(createdAt.value).getTime() : 0
-  const target = slaResolveAt.value ? new Date(slaResolveAt.value).getTime() : 0
-  if (!start || !target || target <= start) return 0
-  const p = ((now.value - start) / (target - start)) * 100
-  return Math.min(100, Math.max(3, Math.round(p)))
-})
-const elapsedText = computed(() => {
-  if (!createdAt.value) return '—'
-  const end = resolvedAt.value ? new Date(resolvedAt.value).getTime() : now.value
-  return fmtDur(end - new Date(createdAt.value).getTime())
 })
 
 /* ===== 时间线：消息与历史合并排序 ===== */
@@ -581,6 +536,22 @@ async function loadAgents() {
   } catch (e) { /* 忽略 */ }
 }
 
+/* 静默刷新：轮询与发送后用，不显示加载遮罩、不打断输入；仅在已贴近底部时自动滚动 */
+async function refreshSilent() {
+  if (!ticketId.value) return
+  try {
+    const data = await api.get(`/tickets/${ticketId.value}`)
+    detail.value = data || {}
+    relatedKnowledge.value = data?.relatedKnowledge || []
+    customerTicketCount.value = data?.customerTicketCount || 0
+    const el = timelineRef.value
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+      await nextTick()
+      scrollToBottom()
+    }
+  } catch (e) { /* 静默失败，下轮再试 */ }
+}
+
 async function loadSummary() {
   if (!ticket.value || summarizing.value) return
   summarizing.value = true
@@ -637,7 +608,7 @@ async function doReply() {
     }
     replyContent.value = ''
     resolveAfter.value = false
-    await load()
+    await refreshSilent()
   } catch (e) { /* 拦截器已提示 */ } finally {
     sending.value = false
   }
@@ -746,10 +717,13 @@ onMounted(() => {
   load()
   loadAgents()
   clockTimer = setInterval(() => { now.value = Date.now() }, 30000)
+  // 15 秒轮询：对方（客服/客户）新发的消息无需手动刷新即可看到
+  pollTimer = setInterval(refreshSilent, 15000)
 })
 
 onBeforeUnmount(() => {
   if (clockTimer) clearInterval(clockTimer)
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>
 
@@ -833,6 +807,7 @@ onBeforeUnmount(() => {
   color: #94a3b8; text-transform: uppercase; margin: 0;
 }
 .card-hint { font-size: 11px; color: #94a3b8; }
+.head-tools { display: flex; align-items: center; gap: 6px; }
 .tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; font-weight: 500; }
 .lv-high { background: #fef3c7; color: #b45309; }
 .lv-mid { background: #dbeafe; color: #1d4ed8; }
@@ -869,14 +844,7 @@ onBeforeUnmount(() => {
   border: 1px solid; border-radius: 4px;
 }
 
-/* SLA */
-.sla-block { display: flex; flex-direction: column; gap: 8px; }
-.sla-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
-.sla-label { color: #64748b; }
-.sla-val { color: #334155; font-family: ui-monospace, monospace; font-size: 11px; }
-.sla-bar { height: 4px; border-radius: 999px; background: #f1f5f9; overflow: hidden; margin-top: 2px; }
-.sla-bar-fill { height: 100%; border-radius: 999px; transition: width 0.3s; }
-.sla-foot { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }
+/* SLA 颜色（客户概览「服务响应」行仍在用） */
 .sla-ok { background: #10b981; color: #059669; }
 .sla-warn { background: #f59e0b; color: #b45309; }
 .sla-danger { background: #ef4444; color: #dc2626; }
@@ -894,28 +862,21 @@ onBeforeUnmount(() => {
 .mid-title { font-size: 16px; font-weight: 600; color: #0f172a; margin: 0; line-height: 1.4; }
 .mid-meta { font-size: 11px; color: #94a3b8; margin: 6px 0 0; }
 
-.ai-summary {
-  margin: 12px 16px; padding: 11px 13px;
-  background: linear-gradient(90deg, #eff6ff, #eef2ff 60%, #faf5ff);
-  border: 1px solid #dbeafe; border-radius: 10px;
-}
-.ais-head {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: #1e40af; margin-bottom: 5px;
-}
-.ais-icon { font-size: 14px; }
-.ais-badge {
-  font-size: 10px; font-weight: 400; padding: 0 6px; border-radius: 999px;
-  background: #fff; color: #64748b; border: 1px solid #e2e8f0;
-}
+/* ===== 左栏：AI 摘要卡 / 问题描述卡 ===== */
 .ais-refresh {
-  margin-left: auto; border: none; background: transparent;
+  border: none; background: transparent;
   color: #60a5fa; cursor: pointer; display: flex; padding: 2px;
 }
 .ais-refresh:hover { color: #2563eb; }
 .ais-refresh.spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .ais-body { font-size: 12px; line-height: 1.7; color: #475569; margin: 0; }
+
+/* 问题描述（左栏卡片） */
+.desc-body {
+  font-size: 12px; line-height: 1.75; color: #475569; margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 .timeline {
   flex: 1; min-height: 0; overflow-y: auto;
@@ -958,16 +919,6 @@ onBeforeUnmount(() => {
 .tl-msg:not(.mine):not(.note) .tl-bubble { border-top-left-radius: 4px; }
 .tl-msg.note .tl-bubble { background: #fffbeb; border-color: #fde68a; color: #78350f; }
 .tl-empty { text-align: center; font-size: 12px; color: #94a3b8; padding: 24px 0; }
-
-/* 问题描述卡 */
-.desc-card {
-  margin: 12px 16px 0; padding: 11px 13px;
-  background: #fcfdfe; border: 1px solid #e8eef5; border-radius: 10px;
-}
-.desc-body {
-  font-size: 12px; line-height: 1.75; color: #475569; margin: 0;
-  white-space: pre-wrap; word-break: break-word;
-}
 
 .reply-box { border-top: 1px solid #e2e8f0; padding: 10px 14px 12px; background: #fff; }
 .reply-tabs { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
