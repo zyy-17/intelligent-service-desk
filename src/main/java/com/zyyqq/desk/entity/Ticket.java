@@ -43,4 +43,12 @@ public class Ticket {
     private String categoryName;
     @Transient
     private String categoryColor;
+    @Transient
+    private String customerPhone;
+    @Transient
+    private String customerEmail;
+    @Transient
+    private String customerCompany;
+    @Transient
+    private String customerDepartment;
 }

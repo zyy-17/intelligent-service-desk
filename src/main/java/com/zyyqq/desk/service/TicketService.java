@@ -2,9 +2,11 @@ package com.zyyqq.desk.service;
 
 import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.common.PageResult;
+import com.zyyqq.desk.entity.KnowledgeArticle;
 import com.zyyqq.desk.entity.Ticket;
 import com.zyyqq.desk.entity.TicketHistory;
 import com.zyyqq.desk.entity.TicketMessage;
+import com.zyyqq.desk.repository.KnowledgeArticleRepository;
 import com.zyyqq.desk.repository.TicketHistoryRepository;
 import com.zyyqq.desk.repository.TicketMessageRepository;
 import com.zyyqq.desk.repository.TicketRepository;
@@ -15,9 +17,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** 工单服务：工单全生命周期（创建/回复/分配/处理/确认/关闭/评价/催办） */
 @Service
@@ -27,14 +33,17 @@ public class TicketService {
     private final TicketMessageRepository messageRepository;
     private final TicketHistoryRepository historyRepository;
     private final UserRepository userRepository;
+    private final KnowledgeArticleRepository articleRepository;
     private final JdbcTemplate jdbc;
 
     public TicketService(TicketRepository ticketRepository, TicketMessageRepository messageRepository,
-                         TicketHistoryRepository historyRepository, UserRepository userRepository, JdbcTemplate jdbc) {
+                         TicketHistoryRepository historyRepository, UserRepository userRepository,
+                         KnowledgeArticleRepository articleRepository, JdbcTemplate jdbc) {
         this.ticketRepository = ticketRepository;
         this.messageRepository = messageRepository;
         this.historyRepository = historyRepository;
         this.userRepository = userRepository;
+        this.articleRepository = articleRepository;
         this.jdbc = jdbc;
     }
 
@@ -90,7 +99,75 @@ public class TicketService {
         data.put("ticket", t);
         data.put("messages", messages);
         data.put("histories", histories);
+        // 详情页左侧客户卡：历史工单数用于判定活跃度标签
+        data.put("customerTicketCount", customerTicketCount(t.getCustomerId()));
+        // 详情页右栏：按工单标题与分类匹配的推荐知识（带匹配度百分比）
+        data.put("relatedKnowledge", relatedKnowledge(t));
         return data;
+    }
+
+    /** 统计客户历史工单数（用于详情页客户活跃度标签） */
+    private long customerTicketCount(Long customerId) {
+        if (customerId == null) {
+            return 0L;
+        }
+        Long n = jdbc.queryForObject("SELECT COUNT(*) FROM ticket WHERE customer_id = ?", Long.class, customerId);
+        return n == null ? 0L : n;
+    }
+
+    /** 按工单标题与分类检索相关文章，用 bigram 重合度换算匹配百分比（启发式，非语义向量） */
+    private List<Map<String, Object>> relatedKnowledge(Ticket t) {
+        StringBuilder query = new StringBuilder();
+        if (t.getTitle() != null) {
+            query.append(t.getTitle()).append(' ');
+        }
+        if (t.getCategoryName() != null) {
+            query.append(t.getCategoryName());
+        }
+        Set<String> grams = bigrams(query.toString(), 24, 16);
+        if (grams.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, KnowledgeArticle> docs = new LinkedHashMap<>();
+        Map<Long, Integer> hits = new HashMap<>();
+        for (String g : grams) {
+            for (KnowledgeArticle a : articleRepository.search(g, 8)) {
+                docs.putIfAbsent(a.getId(), a);
+                hits.merge(a.getId(), 1, Integer::sum);
+            }
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        docs.values().forEach(a -> {
+            int hit = hits.getOrDefault(a.getId(), 0);
+            // 命中率开方放大：命中 1/4 约 50%，命中 4/4 约 99%，避免长标题下分数过低
+            int score = (int) Math.round(Math.sqrt(hit / (double) grams.size()) * 100);
+            if (score < 15) {
+                return;
+            }
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", a.getId());
+            m.put("title", a.getTitle());
+            m.put("summary", a.getSummary());
+            m.put("categoryName", a.getCategoryName());
+            m.put("viewCount", a.getViewCount() == null ? 0 : a.getViewCount());
+            m.put("matchScore", Math.min(score, 99));
+            result.add(m);
+        });
+        result.sort((x, y) -> (int) y.get("matchScore") - (int) x.get("matchScore"));
+        return result.size() > 3 ? result.subList(0, 3) : result;
+    }
+
+    /** 把文本切成去重后的二字片段，最多取前 limit 个字、maxGrams 个片段 */
+    private Set<String> bigrams(String text, int limit, int maxGrams) {
+        String clean = text == null ? "" : text.replaceAll("[\\s，。！？、,.!?：:；;（）()\\[\\]【】\"']", "");
+        if (clean.length() > limit) {
+            clean = clean.substring(0, limit);
+        }
+        Set<String> grams = new LinkedHashSet<>();
+        for (int i = 0; i + 1 < clean.length() && grams.size() < maxGrams; i++) {
+            grams.add(clean.substring(i, i + 2));
+        }
+        return grams;
     }
 
     /** 创建工单（客户提交，初始状态 PENDING） */

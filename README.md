@@ -151,6 +151,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 ```
 🎫 工单管理
    ├─ 创建工单        标题/描述/分类/优先级
+   ├─ 工单详情页      三栏工作台：客户画像 / 沟通时间线 / AI Copilot
    ├─ 分配/转派        主管指定客服
    ├─ 接单/处理        客服受理、回复（公开回复/内部备注）
    ├─ 提交解决方案     客服提交 → 客户确认
@@ -237,7 +238,8 @@ intelligent-service-desk/
 │       ├── views/                    # 页面组件
 │       │   ├── Login.vue             # 登录/注册（含身份选择）
 │       │   ├── Dashboard.vue         # 工作台（客户端为 Hero+快捷入口+三栏首页）
-│       │   ├── Tickets.vue           # 工单管理
+│       │   ├── Tickets.vue           # 工单列表（含新建工单弹窗）
+│       │   ├── TicketDetail.vue      # 工单详情（三栏：客户/时间线/右栏 AI）
 │       │   ├── Customers.vue         # 客户管理
 │       │   ├── Knowledge.vue         # 知识库
 │       │   ├── Chat.vue              # 智能问答（含会话侧栏）
@@ -372,7 +374,7 @@ intelligent-service-desk/
 | ---- | --------------- | --------------------------------- | ---- |
 | GET  | `/`             | 工单列表（按角色过滤数据范围）    | ✅    |
 | POST | `/`             | 创建工单（支持 Idempotency-Key）  | ✅    |
-| GET  | `/{id}`         | 工单详情（含消息、历史）          | ✅    |
+| GET  | `/{id}`         | 工单详情（消息/历史/客户画像/推荐知识） | ✅    |
 | POST | `/{id}/assign`  | 分配/转派                         | ✅    |
 | POST | `/{id}/accept`  | 接单                              | ✅    |
 | POST | `/{id}/messages`| 回复 / 内部备注                   | ✅    |
@@ -435,6 +437,7 @@ intelligent-service-desk/
 | POST   | `/api/ai/summarize`    | 工单摘要                 |
 | POST   | `/api/ai/classify`     | 分类推荐                 |
 | POST   | `/api/ai/draft`        | 回复草稿                 |
+| POST   | `/api/ai/suggest-steps`| 工单处置建议（2-3 步）   |
 | POST   | `/api/ai/search`       | 知识检索                 |
 | POST   | `/api/ai/sessions`     | 新建会话                 |
 | GET    | `/api/ai/sessions`     | 会话列表                 |
@@ -472,17 +475,18 @@ ai-service/
 │   │   ├── health.py            #   GET  /health
 │   │   ├── chat.py              #   POST /api/ai/chat、/chat/stream
 │   │   ├── sessions.py          #   /api/ai/sessions 增删查
-│   │   └── ticket.py            #   summarize / classify / draft / search
+│   │   └── ticket.py            #   summarize / classify / draft / suggest-steps / search
 │   ├── services/                # 业务层：编排流程
 │   │   ├── chat_service.py      #   检索 → 模型 → 降级 → 落库
 │   │   ├── session_service.py   #   多轮上下文读取、一轮问答落库
-│   │   └── ticket_service.py    #   摘要 / 分类 / 草稿 / 检索
+│   │   └── ticket_service.py    #   摘要 / 分类 / 草稿 / 处置建议 / 检索
 │   ├── prompts/                 # 提示词层：每个场景一个系统角色提示词
 │   │   ├── base.py              #   $变量 模板渲染
 │   │   ├── chat.py              #   客户问答角色（小智）
 │   │   ├── summary.py           #   工单摘要
 │   │   ├── classify.py          #   分类推荐
-│   │   └── draft.py             #   回复草稿
+│   │   ├── draft.py             #   回复草稿
+│   │   └── suggest.py           #   工单处置建议
 │   ├── llm/                     # 模型层
 │   │   ├── client.py            #   OpenAI 兼容调用（一次 / 流式）
 │   │   └── errors.py            #   LLMError 错误码

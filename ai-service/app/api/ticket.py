@@ -1,4 +1,4 @@
-"""工单辅助路由：摘要、分类推荐、回复草稿、知识检索。"""
+"""工单辅助路由：摘要、分类推荐、回复草稿、处置建议、知识检索。"""
 from fastapi import APIRouter
 
 from ..schemas import (
@@ -8,6 +8,8 @@ from ..schemas import (
     DraftResponse,
     SearchRequest,
     SearchResponse,
+    SuggestStepsRequest,
+    SuggestStepsResponse,
     SummaryRequest,
     SummaryResponse,
 )
@@ -32,6 +34,12 @@ def classify(req: ClassifyRequest):
 def draft(req: DraftRequest):
     """回复草稿：根据工单与知识库起草客服回复。"""
     return ticket_service.draft(req)
+
+
+@router.post("/suggest-steps", response_model=SuggestStepsResponse)
+def suggest_steps(req: SuggestStepsRequest):
+    """处置建议：根据工单内容与知识库给出 2-3 步可执行建议。"""
+    return ticket_service.suggest_steps(req)
 
 
 @router.post("/search", response_model=SearchResponse)

@@ -73,3 +73,29 @@ class SearchResponse(BaseModel):
     task_type: str = "SEARCH"
     results: List[KnowledgeItem]
     error: Optional[ErrorDetail] = None
+
+
+class SuggestStep(BaseModel):
+    """单条处置建议步骤。"""
+    order: int = Field(..., description="步骤序号，从 1 开始")
+    title: str = Field(..., description="动作标题，15 字内")
+    detail: str = Field("", description="具体做法，60 字内")
+
+
+class SuggestStepsRequest(BaseModel):
+    """工单处置建议请求。"""
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field("", max_length=5000)
+    category: str = Field("", description="工单分类名称")
+    knowledge: List[KnowledgeItem] = Field(default_factory=list, description="知识库参考")
+
+
+class SuggestStepsResponse(BaseModel):
+    """工单处置建议响应。"""
+    task_id: str
+    task_type: str = "SUGGEST_STEPS"
+    steps: List[SuggestStep] = Field(default_factory=list)
+    source: str = Field("模型生成", description="建议来源")
+    fallback: bool = Field(False, description="是否降级为规则建议")
+    model: Optional[str] = None
+    error: Optional[ErrorDetail] = None

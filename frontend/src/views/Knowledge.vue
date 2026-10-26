@@ -79,6 +79,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Plus } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
@@ -163,6 +164,9 @@ async function doSave() {
 }
 
 onMounted(() => {
+  // 支持从工单详情页「推荐知识库」带关键字跳转过来
+  const kw = useRoute().query.keyword
+  if (kw) keyword.value = String(kw)
   load()
   loadCategories()
 })

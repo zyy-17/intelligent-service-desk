@@ -1,7 +1,9 @@
 package com.zyyqq.desk.controller;
 
 import com.zyyqq.desk.common.ApiResponse;
+import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.security.AuthContext;
+import com.zyyqq.desk.security.RequireRole;
 import com.zyyqq.desk.service.AiService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -93,6 +95,17 @@ public class AiController {
     @PostMapping("/draft")
     public ApiResponse<Object> draft(@RequestBody Map<String, Object> body) {
         return ApiResponse.ok(aiService.proxy("POST", "/api/ai/draft", body));
+    }
+
+    /** 工单处置建议：按工单内容生成 2-3 步操作建议，仅客服侧可用 */
+    @PostMapping("/suggest-steps")
+    @RequireRole({"ADMIN", "SUPERVISOR", "AGENT"})
+    public ApiResponse<Object> suggestSteps(@RequestBody Map<String, Object> body) {
+        Object id = body.get("ticket_id");
+        if (id == null || String.valueOf(id).isBlank()) {
+            throw new BizException("缺少 ticket_id");
+        }
+        return ApiResponse.ok(aiService.suggestSteps(Long.valueOf(String.valueOf(id))));
     }
 
     /** 新建会话 */

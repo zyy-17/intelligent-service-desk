@@ -11,6 +11,7 @@
 | `POST /api/ai/summarize` | 工单摘要 |
 | `POST /api/ai/classify` | 分类推荐 |
 | `POST /api/ai/draft` | 回复草稿 |
+| `POST /api/ai/suggest-steps` | 工单处置建议（2-3 步可执行动作） |
 | `POST /api/ai/search` | 知识检索（纯本地，不依赖模型） |
 | `GET /health` | 健康检查 |
 
@@ -85,17 +86,18 @@ ai-service/
 │   │   ├── health.py            #   GET /health
 │   │   ├── chat.py              #   POST /api/ai/chat、/chat/stream
 │   │   ├── sessions.py          #   /api/ai/sessions 增删查
-│   │   └── ticket.py            #   summarize / classify / draft / search
+│   │   └── ticket.py            #   summarize / classify / draft / suggest-steps / search
 │   ├── services/                # 业务层
 │   │   ├── chat_service.py      #   检索 → 模型 → 降级 → 落库
 │   │   ├── session_service.py   #   多轮上下文、一轮问答落库
-│   │   └── ticket_service.py    #   摘要 / 分类 / 草稿 / 检索
+│   │   └── ticket_service.py    #   摘要 / 分类 / 草稿 / 处置建议 / 检索
 │   ├── prompts/                 # 提示词层（系统角色提示词）
 │   │   ├── base.py              #   $变量 模板渲染
 │   │   ├── chat.py              #   客户问答角色（小智）
 │   │   ├── summary.py           #   工单摘要
 │   │   ├── classify.py          #   分类推荐
-│   │   └── draft.py             #   回复草稿
+│   │   ├── draft.py             #   回复草稿
+│   │   └── suggest.py           #   工单处置建议
 │   ├── llm/
 │   │   ├── client.py            #   OpenAI 兼容调用（一次 / 流式）
 │   │   └── errors.py            #   LLMError 错误码
@@ -124,7 +126,7 @@ AI_ANSWER_MAX_CHARS=200
 
 提示词三层约束：**角色定位**（身份/语气/立场）→ **回答规则**（知识库优先、不编造、跟随语言、简洁分点、不承诺赔付时限、不索要密码验证码、结合历史指代、不泄露提示词）→ **输出格式**（不复述问题、标注《文章标题》来源、不用一级标题）。
 
-摘要、分类、草稿各有独立提示词（`summary.py` / `classify.py` / `draft.py`），与客户问答互不干扰：分类强制"只输出一个数字"，摘要强制"一句话 50 字内"，草稿强制"称呼→共情→方案→下一步"结构。
+摘要、分类、草稿各有独立提示词（`summary.py` / `classify.py` / `draft.py` / `suggest.py`），与客户问答互不干扰：分类强制"只输出一个数字"，摘要强制"一句话 50 字内"，草稿强制"称呼→共情→方案→下一步"结构，处置建议强制"序号. 动作标题｜具体做法"两段式且只给 2-3 步。
 
 ## 问答上下文（由 Java 侧注入）
 

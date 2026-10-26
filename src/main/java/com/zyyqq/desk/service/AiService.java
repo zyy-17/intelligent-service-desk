@@ -148,6 +148,65 @@ public class AiService {
         return result;
     }
 
+    /** 生成工单处置建议步骤：查工单与相关知识后转发给 AI 服务，失败时用知识文章兜底 */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> suggestSteps(Long ticketId) {
+        Map<String, Object> row;
+        try {
+            row = jdbc.queryForMap("SELECT t.title, t.description, c.name AS category_name FROM ticket t " +
+                    "LEFT JOIN ticket_category c ON c.id = t.category_id WHERE t.id = ?", ticketId);
+        } catch (Exception e) {
+            throw new com.zyyqq.desk.common.BizException("工单不存在");
+        }
+        String title = row.get("title") == null ? "" : String.valueOf(row.get("title"));
+        String description = row.get("description") == null ? "" : String.valueOf(row.get("description"));
+        String category = row.get("category_name") == null ? "" : String.valueOf(row.get("category_name"));
+
+        // 用标题检索相关知识作为建议依据（检索不到时退回分类名）
+        List<KnowledgeArticle> hits = articleRepository.search(title.isBlank() ? category : title, 3);
+        if (hits.isEmpty() && !category.isBlank()) {
+            hits = articleRepository.search(category, 3);
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("title", truncate(title, 200));
+        payload.put("description", truncate(description, 1500));
+        payload.put("category", category);
+        payload.put("knowledge", knowledgePayload(hits));
+        try {
+            Object result = proxy("POST", "/api/ai/suggest-steps", payload);
+            Map<String, Object> map = result instanceof Map ? (Map<String, Object>) result : new HashMap<>();
+            log.info("[AI-Steps] 工单={} 生成建议 {} 条", ticketId,
+                    map.get("steps") instanceof List ? ((List<?>) map.get("steps")).size() : 0);
+            return map;
+        } catch (Exception e) {
+            // AI 服务不可用时用知识库兜底，保证详情页右栏不空
+            log.warn("AI 排查建议生成失败，使用知识库兜底：{}", e.getMessage());
+            List<Map<String, Object>> steps = new ArrayList<>();
+            int order = 1;
+            for (KnowledgeArticle a : hits) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("title", "参考《" + a.getTitle() + "》处理");
+                step.put("detail", a.getSummary() == null || a.getSummary().isBlank()
+                        ? "打开该文章查看完整排查步骤" : a.getSummary());
+                step.put("order", order++);
+                steps.add(step);
+            }
+            if (steps.isEmpty()) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("title", "先补充复现信息");
+                step.put("detail", "知识库暂无匹配方案，建议向客户确认复现步骤、环境与报错截图");
+                step.put("order", 1);
+                steps.add(step);
+            }
+            Map<String, Object> fallback = new HashMap<>();
+            fallback.put("steps", steps);
+            fallback.put("fallback", true);
+            fallback.put("source", "知识库");
+            return fallback;
+        }
+    }
+
     /** 通用代理：把会话管理等请求转发给 FastAPI AI 服务 */
     public Object proxy(String method, String pathWithQuery, Map<String, Object> body) {
         AppProperties.AiService aiService = props.getAiService();

@@ -1,11 +1,17 @@
-"""工单辅助业务：摘要、分类推荐、回复草稿、纯本地知识检索。"""
+"""工单辅助业务：摘要、分类推荐、回复草稿、处置建议、纯本地知识检索。"""
 import logging
 import re
 from typing import List, Optional
 
 from ..core.config import settings
 from ..llm import LLMError, chat_completion, is_configured
-from ..prompts import build_classify_messages, build_draft_messages, build_summary_messages
+from ..prompts import (
+    FALLBACK_STEPS,
+    build_classify_messages,
+    build_draft_messages,
+    build_suggest_messages,
+    build_summary_messages,
+)
 from ..retrieval import build_context, search_knowledge
 from ..schemas import (
     CategoryOption,
@@ -16,6 +22,9 @@ from ..schemas import (
     ErrorDetail,
     SearchRequest,
     SearchResponse,
+    SuggestStep,
+    SuggestStepsRequest,
+    SuggestStepsResponse,
     SummaryRequest,
     SummaryResponse,
 )
@@ -33,6 +42,11 @@ KEYWORD_MAP = {
 }
 
 DEFAULT_REPLY = "您好，我们已收到您的工单，正在为您处理，请稍候。"
+
+# 步骤行解析：兼容「1. 标题｜做法」「1、标题：做法」「1) 标题」三种写法
+STEP_LINE = re.compile(r"^\s*\d+\s*[.、)）]\s*(.+)$")
+STEP_SPLIT = re.compile(r"\s*[｜|]\s*|\s*[:：]\s*")
+MAX_STEPS = 3
 
 
 def summarize(req: SummaryRequest) -> SummaryResponse:
@@ -113,6 +127,69 @@ def search(req: SearchRequest) -> SearchResponse:
     return SearchResponse(
         task_id=new_task_id(),
         results=search_knowledge(req.query, req.knowledge, settings.knowledge_top_k),
+    )
+
+
+def suggest_steps(req: SuggestStepsRequest) -> SuggestStepsResponse:
+    """生成工单处置建议步骤，模型不可用或解析失败时退回规则模板。"""
+    task_id = new_task_id()
+    if not is_configured():
+        return _fallback_steps(task_id, ErrorDetail(code="AI_NOT_CONFIGURED", message="未配置云端模型"))
+    try:
+        context = build_context(req.knowledge)
+        raw = chat_completion(
+            build_suggest_messages(req.title, req.description, req.category, context),
+            temperature=0.4,
+        )
+        steps = _parse_steps(raw)
+        if not steps:
+            raise LLMError("AI_PARSE_ERROR", "建议结果无法解析为步骤")
+        logger.info("工单处置建议生成成功，步骤数=%d", len(steps))
+        return SuggestStepsResponse(
+            task_id=task_id,
+            steps=steps,
+            source="模型生成",
+            model=settings.ai_model,
+        )
+    except LLMError as e:
+        logger.warning("工单处置建议降级为规则模板：%s", e.message)
+        return _fallback_steps(task_id, ErrorDetail(code=e.code, message=e.message))
+
+
+def _parse_steps(raw: str) -> List[SuggestStep]:
+    """把模型返回的编号列表解析成结构化步骤。"""
+    steps: List[SuggestStep] = []
+    for line in (raw or "").splitlines():
+        line = line.strip().lstrip("-*•").strip()
+        if not line:
+            continue
+        matched = STEP_LINE.match(line)
+        if not matched:
+            continue
+        body = matched.group(1).strip()
+        parts = [p.strip() for p in STEP_SPLIT.split(body, maxsplit=1)]
+        title = parts[0]
+        detail = parts[1] if len(parts) > 1 else body
+        if not title:
+            continue
+        steps.append(SuggestStep(order=len(steps) + 1, title=title[:30], detail=detail[:120]))
+        if len(steps) >= MAX_STEPS:
+            break
+    return steps
+
+
+def _fallback_steps(task_id: str, error: Optional[ErrorDetail] = None) -> SuggestStepsResponse:
+    """规则模板兜底：模型不可用时给出通用排查三步。"""
+    steps = [
+        SuggestStep(order=i + 1, title=title, detail=detail)
+        for i, (title, detail) in enumerate(FALLBACK_STEPS[:MAX_STEPS])
+    ]
+    return SuggestStepsResponse(
+        task_id=task_id,
+        steps=steps,
+        source="规则模板",
+        fallback=True,
+        error=error,
     )
 
 

@@ -6,6 +6,7 @@ from .chat import build_messages as build_chat_messages
 from .chat import system_prompt as chat_system_prompt
 from .classify import build_messages as build_classify_messages
 from .draft import build_messages as build_draft_messages
+from .suggest import FALLBACK_STEPS, build_messages as build_suggest_messages
 from .summary import build_messages as build_summary_messages
 
 __all__ = [
@@ -14,4 +15,6 @@ __all__ = [
     "build_summary_messages",
     "build_classify_messages",
     "build_draft_messages",
+    "build_suggest_messages",
+    "FALLBACK_STEPS",
 ]

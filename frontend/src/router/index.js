@@ -15,6 +15,7 @@ const routes = [
     children: [
       { path: 'dashboard', name: 'dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '工作台' } },
       { path: 'tickets', name: 'tickets', component: () => import('../views/Tickets.vue'), meta: { title: '工单管理' } },
+      { path: 'tickets/:id', name: 'ticket-detail', component: () => import('../views/TicketDetail.vue'), meta: { title: '工单详情' } },
       { path: 'customers', name: 'customers', component: () => import('../views/Customers.vue'), meta: { title: '客户管理' } },
       { path: 'knowledge', name: 'knowledge', component: () => import('../views/Knowledge.vue'), meta: { title: '知识库' } },
       { path: 'chat', name: 'chat', component: () => import('../views/Chat.vue'), meta: { title: '智能问答' } },
@@ -46,9 +47,11 @@ router.beforeEach(async (to, from, next) => {
     await auth.refreshMenus()
   }
   // 角色权限守卫：菜单由后端按角色下发，手输越权路径时拦截（个人中心所有角色可用）
+  // 用前缀匹配，让 /tickets/123 这类子路径跟随父级菜单放行
   if (to.name !== 'profile' && to.path !== '/') {
     const allowed = auth.menuPaths || []
-    if (allowed.length && !allowed.includes(to.path)) {
+    const permitted = allowed.some(p => to.path === p || to.path.startsWith(p + '/'))
+    if (allowed.length && !permitted) {
       next('/dashboard')
       return
     }
