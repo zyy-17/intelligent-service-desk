@@ -12,11 +12,14 @@ Java 业务后端作为主控方，通过 HTTP 调用本服务。
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import all_routers
 from .core.config import settings
 from .core.logging_setup import setup_logging
 
+# 必须先初始化日志：业务模块（如 storage 层的 SessionStore）在 import 时就连接 Redis 并打日志，
+# 若晚于业务 import，这些日志会走 logging 的兜底 handler，丢失时间戳与级别，不利于排查。
 setup_logging()
+
+from .api import all_routers  # noqa: E402  依赖上面的日志初始化，必须后置
 
 app = FastAPI(
     title="Intelligent Service Desk AI Service",

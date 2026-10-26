@@ -29,29 +29,39 @@ class SessionStore:
         self._memory: Dict[str, dict] = {}
         self._redis = None
         if redis_lib is not None:
-            for pwd in (settings.redis_password, None):
-                if pwd is None and settings.redis_password:
-                    continue
-                try:
-                    client = redis_lib.Redis(
-                        host=settings.redis_host,
-                        port=settings.redis_port,
-                        db=settings.redis_db,
-                        password=pwd,
-                        socket_timeout=3,
-                        socket_connect_timeout=3,
-                        decode_responses=True,
-                    )
-                    client.ping()
-                    self._redis = client
-                    logger.info("Redis 连接成功：%s:%s db=%s (password=%s)",
-                                settings.redis_host, settings.redis_port, settings.redis_db,
-                                "是" if pwd else "无")
-                    break
-                except Exception as e:
-                    logger.warning("Redis 连接失败(password=%s)：%s", "已填" if pwd else "无", e)
+            self._connect()
+        else:
+            # 常见于未安装依赖（pip install redis）或跑在没装 redis 包的 Python 解释器上
+            logger.warning("未找到 redis 依赖包，无法连接 Redis %s:%s db=%s（请先执行 pip install redis==5.2.1）",
+                           settings.redis_host, settings.redis_port, settings.redis_db)
         if self._redis is None:
             logger.warning("Redis 不可用，会话降级为进程内存存储（服务重启后会话丢失）")
+
+    def _connect(self):
+        """按配置尝试连通 Redis，成功则保存客户端。"""
+        for pwd in (settings.redis_password, None):
+            if pwd is None and settings.redis_password:
+                continue
+            try:
+                client = redis_lib.Redis(
+                    host=settings.redis_host,
+                    port=settings.redis_port,
+                    db=settings.redis_db,
+                    password=pwd,
+                    socket_timeout=3,
+                    socket_connect_timeout=3,
+                    decode_responses=True,
+                )
+                client.ping()
+                self._redis = client
+                logger.info("Redis 连接成功：%s:%s db=%s (password=%s)",
+                            settings.redis_host, settings.redis_port, settings.redis_db,
+                            "是" if pwd else "无")
+                break
+            except Exception as e:
+                logger.warning("Redis 连接失败(%s:%s db=%s, password=%s)：%s: %s",
+                               settings.redis_host, settings.redis_port, settings.redis_db,
+                               "已填" if pwd else "无", type(e).__name__, e)
 
     @property
     def redis_available(self) -> bool:
