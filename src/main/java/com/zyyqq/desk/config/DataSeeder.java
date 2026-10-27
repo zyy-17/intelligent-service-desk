@@ -6,16 +6,46 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
-/** 演示数据初始化：空库时填充用户/分类/知识/工单/通知，保证可重复启动 */
+/** 演示数据初始化：空库时填充用户/分类/工单/通知，并幂等补齐知识库、收藏与近期工单 */
 @Slf4j
 @Component
 public class DataSeeder implements CommandLineRunner {
+
+    /** 近期补建工单使用的标题池 */
+    private static final String[] RECENT_TITLES = {
+            "无法登录系统，提示账号或密码错误", "账户余额显示异常", "需要导出本季度数据报表",
+            "页面加载缓慢，影响使用", "申请退款，订单未生效", "如何升级到企业版套餐",
+            "API 调用返回 401 错误", "想了解产品新功能", "发票抬头需要修改",
+            "二次验证绑定失败", "支付成功后订单状态未更新", "希望增加批量导入功能",
+            "手机收不到验证码", "系统偶发闪退", "数据统计与实际情况不符",
+            "账号疑似被盗", "建议增加夜间模式", "合同电子章无法生成",
+            "咨询续费优惠政策", "告警通知未收到", "文件上传失败",
+            "权限分配不合理", "报表导出中文乱码", "接口响应超时",
+            "希望支持微信登录", "客服响应速度慢", "登录后频繁掉线",
+            "退款进度查询", "账单金额核对", "如何解绑旧设备"
+    };
+
+    /** 近期补建工单使用的客服回复文案 */
+    private static final String[] RECENT_REPLIES = {
+            "已收到您的反馈，正在为您核实，请稍等。",
+            "方便提供一下截图或操作时间吗？这样能更快定位。",
+            "问题已复现，正在处理中，有进展第一时间同步您。",
+            "已为您提交处理，预计今天内给出结果。",
+            "麻烦您清理浏览器缓存后重试，还不行请告诉我。"
+    };
 
     private final JdbcTemplate jdbc;
 
@@ -23,7 +53,7 @@ public class DataSeeder implements CommandLineRunner {
         this.jdbc = jdbc;
     }
 
-    /** 启动时检查空库则初始化，并补充知识库 */
+    /** 启动时检查空库则初始化，并补齐知识库与近期工单演示数据 */
     @Override
     public void run(String... args) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user", Long.class);
@@ -35,6 +65,7 @@ public class DataSeeder implements CommandLineRunner {
         }
         ensureKnowledge();
         ensureFavorites();
+        ensureRecentTickets();
     }
 
     /** 初始化用户、分类、知识、工单与通知 */
@@ -59,15 +90,7 @@ public class DataSeeder implements CommandLineRunner {
                 "其他", "#a855f7", 24, 6);
         long[] cats = {catAccount, catProduct, catTech, catBilling, catSuggestion, catOther};
 
-        // ===== 知识分类 =====
-        long kcGuide = insertAndGetId("INSERT INTO knowledge_category(name,sort) VALUES(?,?)", "使用指南", 1);
-        long kcFaq = insertAndGetId("INSERT INTO knowledge_category(name,sort) VALUES(?,?)", "常见问题", 2);
-        long kcAccount = insertAndGetId("INSERT INTO knowledge_category(name,sort) VALUES(?,?)", "账号安全", 3);
-        long kcBilling = insertAndGetId("INSERT INTO knowledge_category(name,sort) VALUES(?,?)", "账单与退款", 4);
-        long[] kcats = {kcGuide, kcFaq, kcAccount, kcBilling};
-
-        seedKnowledge(kcats, adminId);
-
+        // ===== 工单与通知（知识库统一由 ensureKnowledge 补齐） =====
         seedTickets(adminId, supId, cats);
 
         seedNotification(adminId, supId);
@@ -102,195 +125,308 @@ public class DataSeeder implements CommandLineRunner {
                 username, PasswordUtil.hash("123456"), displayName, role, phone, dept, color);
     }
 
-    /** 执行插入并返回自增主键 */
+    /** 执行插入并返回自增主键（参数绑定交给 Spring，兼容 null 值） */
     private long insertAndGetId(String sql, Object... args) {
         org.springframework.jdbc.support.KeyHolder keyHolder = new org.springframework.jdbc.support.GeneratedKeyHolder();
         jdbc.update(con -> {
             java.sql.PreparedStatement ps = con.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS);
-            for (int i = 0; i < args.length; i++) {
-                ps.setObject(i + 1, args[i]);
-            }
+            new org.springframework.jdbc.core.ArgumentPreparedStatementSetter(args).setValues(ps);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
         return key == null ? 0L : key.longValue();
     }
 
-    /** 初始化基础知识文章 */
-    private void seedKnowledge(long[] kcats, long adminId) {
-        seedKnowledgeArticles(kcats, adminId, baseArticles(kcats));
+    /** 知识分类按名称取 id，不存在则创建（幂等） */
+    private long ensureKnowledgeCategory(String name, int sort) {
+        List<Long> ids = jdbc.queryForList("SELECT id FROM knowledge_category WHERE name = ?", Long.class, name);
+        return ids.isEmpty()
+                ? insertAndGetId("INSERT INTO knowledge_category(name,sort) VALUES(?,?)", name, sort)
+                : ids.get(0);
     }
 
-    /** 按标题判重后补充知识文章（幂等，可重复执行） */
+    /**
+     * 补齐知识库文章到 75 篇：新增缺失文章、把旧版短文替换为详细正文，
+     * 并给每篇分配互不相同的发布时间与更新时间
+     */
     private void ensureKnowledge() {
         try {
-            Long kcatCount = jdbc.queryForObject("SELECT COUNT(*) FROM knowledge_category", Long.class);
-            if (kcatCount == null || kcatCount == 0) {
-                return; // 空库时由 seed() 统一初始化
+            Long adminId = jdbc.queryForObject(
+                    "SELECT id FROM sys_user WHERE role = 'ADMIN' ORDER BY id LIMIT 1", Long.class);
+            if (adminId == null) {
+                return;
             }
-            long kcGuide = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='使用指南'", Long.class);
-            long kcFaq = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='常见问题'", Long.class);
-            long kcAccount = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='账号安全'", Long.class);
-            long kcBilling = jdbc.queryForObject("SELECT id FROM knowledge_category WHERE name='账单与退款'", Long.class);
-            seedKnowledgeArticles(new long[]{kcGuide, kcFaq, kcAccount, kcBilling},
-                    jdbc.queryForObject("SELECT id FROM sys_user WHERE role='ADMIN' ORDER BY id LIMIT 1", Long.class),
-                    extraArticles(new long[]{kcGuide, kcFaq, kcAccount, kcBilling}));
-            log.info("知识库补充检查完成");
+            String[] names = {"使用指南", "常见问题", "账号安全", "账单与退款", "技术故障", "产品功能"};
+            Map<String, Long> catIds = new LinkedHashMap<>();
+            for (int i = 0; i < names.length; i++) {
+                catIds.put(names[i], ensureKnowledgeCategory(names[i], i + 1));
+            }
+
+            Random rnd = new Random(20261027L);
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            LocalDateTime now = LocalDateTime.now();
+            List<KnowledgeSeedData.SeedArticle> all = KnowledgeSeedData.all();
+            int inserted = 0;
+            int expanded = 0;
+
+            for (int i = 0; i < all.size(); i++) {
+                KnowledgeSeedData.SeedArticle s = all.get(i);
+                // 用与总数互质的步长打乱槽位，让文章列表的时间顺序不跟随插入顺序
+                long slot = (i * 37L) % all.size();
+                // 每篇文章错开 23 / 17 小时并叠加随机分钟，保证 75 篇文章的发布与更新时间各不相同
+                LocalDateTime published = now.minusHours(6 + slot * 23 + rnd.nextInt(11)).minusMinutes(rnd.nextInt(60));
+                LocalDateTime updated = now.minusHours(2 + slot * 17 + rnd.nextInt(9)).minusMinutes(rnd.nextInt(60));
+                // 极端情况下更新时间可能落到发布时间之前，回退为发布后 12 小时
+                if (!updated.isAfter(published)) {
+                    updated = published.plusHours(12);
+                }
+                if (updated.isAfter(now)) {
+                    updated = now.minusMinutes(30L + i);
+                }
+                // 浏览量控制在 80~320：按 5%~11% 折算后的收藏量刚好落在真实用户数之内
+                int views = 80 + rnd.nextInt(241);
+
+                List<Long> ids = jdbc.queryForList(
+                        "SELECT id FROM knowledge_article WHERE title = ?", Long.class, s.title());
+                if (ids.isEmpty()) {
+                    jdbc.update("INSERT INTO knowledge_article(title,summary,body,category_id,keywords,status,author_id," +
+                                    "view_count,published_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                            s.title(), s.summary(), s.body(), catIds.get(s.category()), s.keywords(),
+                            "PUBLISHED", adminId, views,
+                            published.format(fmt), published.format(fmt), updated.format(fmt));
+                    inserted++;
+                    continue;
+                }
+                Long id = ids.get(0);
+                Integer bodyLenObj = jdbc.queryForObject(
+                        "SELECT COALESCE(CHAR_LENGTH(body), 0) FROM knowledge_article WHERE id = ?", Integer.class, id);
+                Integer viewsObj = jdbc.queryForObject(
+                        "SELECT view_count FROM knowledge_article WHERE id = ?", Integer.class, id);
+                int bodyLen = bodyLenObj == null ? 0 : bodyLenObj;
+                int curViews = viewsObj == null ? 0 : viewsObj;
+                // 旧版正文不足 300 字的短文统一替换为详细版，保证 90% 以上文章都有完整说明
+                boolean expand = bodyLen < 300;
+                // 浏览量超过 600 时按 5% 折算的收藏量会超过真实用户数，比例失真，这里重新分配
+                boolean resetViews = curViews < 80 || curViews > 600;
+                if (!expand && !resetViews) {
+                    continue;
+                }
+                if (expand) {
+                    jdbc.update("UPDATE knowledge_article SET summary = ?, body = ?, keywords = ?, category_id = ? WHERE id = ?",
+                            s.summary(), s.body(), s.keywords(), catIds.get(s.category()), id);
+                    expanded++;
+                }
+                if (resetViews) {
+                    jdbc.update("UPDATE knowledge_article SET view_count = ? WHERE id = ?", views, id);
+                }
+                // 上面的 UPDATE 会触发 ON UPDATE CURRENT_TIMESTAMP，这里再显式覆盖为差异化的更新时间
+                jdbc.update("UPDATE knowledge_article SET updated_at = ? WHERE id = ?", updated.format(fmt), id);
+            }
+            log.info("知识库数据检查完成：新增 {} 篇，扩充详细正文 {} 篇，共 {} 篇", inserted, expanded, all.size());
         } catch (Exception e) {
-            log.warn("知识库补充失败（不影响启动）：{}", e.getMessage());
+            log.warn("知识库数据补充失败（不影响启动）：{}", e.getMessage());
         }
     }
 
-    /** 首次启动时为演示数据补充知识收藏记录（幂等，已有收藏则跳过） */
+    /** 补充收藏记录：收藏量按浏览量的 5%~11% 随机生成，向上取整确保不低于 5%，收藏人随机抽取 */
     private void ensureFavorites() {
         try {
-            Long exists = jdbc.queryForObject("SELECT COUNT(*) FROM knowledge_favorite", Long.class);
-            if (exists != null && exists > 0) {
-                return;
-            }
             List<Long> users = jdbc.queryForList("SELECT id FROM sys_user ORDER BY id", Long.class);
-            List<Long> articles = jdbc.queryForList(
-                    "SELECT id FROM knowledge_article WHERE status = 'PUBLISHED' ORDER BY id", Long.class);
+            List<Map<String, Object>> articles = jdbc.queryForList(
+                    "SELECT id, view_count FROM knowledge_article ORDER BY id");
             if (users.isEmpty() || articles.isEmpty()) {
                 return;
             }
-            Random rnd = new Random(7);
+            Random rnd = new Random(20261028L);
             int added = 0;
-            for (Long articleId : articles) {
-                // 每篇文章随机 1~4 位用户收藏，保证收藏量有差异
+            for (Map<String, Object> a : articles) {
+                long articleId = ((Number) a.get("id")).longValue();
+                Object viewsObj = a.get("view_count") != null ? a.get("view_count") : a.get("viewCount");
+                int views = viewsObj == null ? 0 : ((Number) viewsObj).intValue();
+                // 收藏率按文章 ID 做种子，同一篇文章每次计算出的目标值固定，保证重复启动幂等
+                double rate = 0.05 + new Random(articleId * 1000003L + 7L).nextDouble() * 0.06;
+                int target = Math.min(Math.max((int) Math.ceil(views * rate), 3), users.size());
+                Set<Long> exists = new HashSet<>(jdbc.queryForList(
+                        "SELECT user_id FROM knowledge_favorite WHERE article_id = ?", Long.class, articleId));
+                int need = target - exists.size();
+                // 少量差额不补齐，避免用户手动取消收藏后重启又被写回
+                if (need < 2) {
+                    continue;
+                }
                 List<Long> pool = new ArrayList<>(users);
-                java.util.Collections.shuffle(pool, rnd);
-                int n = Math.min(pool.size(), 1 + rnd.nextInt(4));
-                for (int i = 0; i < n; i++) {
-                    jdbc.update("INSERT IGNORE INTO knowledge_favorite(article_id, user_id) VALUES(?,?)",
-                            articleId, pool.get(i));
+                Collections.shuffle(pool, rnd);
+                for (Long uid : pool) {
+                    if (need <= 0) {
+                        break;
+                    }
+                    if (exists.contains(uid)) {
+                        continue;
+                    }
+                    jdbc.update("INSERT IGNORE INTO knowledge_favorite(article_id, user_id) VALUES(?,?)", articleId, uid);
+                    need--;
                     added++;
                 }
             }
-            log.info("知识库收藏演示数据初始化完成：{} 条", added);
-        } catch (Exception e) {
-            log.warn("知识库收藏演示数据初始化失败（不影响启动）：{}", e.getMessage());
-        }
-    }
-
-    /** 批量写入知识文章（按标题去重） */
-    private void seedKnowledgeArticles(long[] kcats, long adminId, Object[][] articles) {
-        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        Random rnd = new Random(42);
-        for (Object[] a : articles) {
-            Integer exists = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM knowledge_article WHERE title = ?", Integer.class, a[0]);
-            if (exists != null && exists > 0) {
-                continue;
+            if (added > 0) {
+                log.info("知识库收藏数据补充完成：新增 {} 条", added);
             }
-            String published = LocalDateTime.now().minusDays(rnd.nextInt(60)).format(fmt);
-            int views = 50 + rnd.nextInt(3000);
-            jdbc.update("INSERT INTO knowledge_article(title,summary,body,category_id,keywords,status,author_id,view_count,published_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
-                    a[0], a[1], a[2], a[4], a[3], "PUBLISHED", adminId, views, published);
+        } catch (Exception e) {
+            log.warn("知识库收藏数据补充失败（不影响启动）：{}", e.getMessage());
         }
     }
 
-    /** 基础知识文章内容 */
-    private Object[][] baseArticles(long[] kcats) {
-        return new Object[][]{
-                {"如何重置登录密码", "忘记密码时可通过注册邮箱或手机号自助重置，本文说明操作步骤。",
-                        "**操作步骤**\n\n1. 打开登录页，点击「忘记密码」。\n2. 输入注册时的手机号或邮箱，获取验证码。\n3. 验证通过后设置新密码（至少 8 位，含字母和数字）。\n4. 使用新密码登录。\n\n> 若无法收到验证码，请联系人工客服协助处理。",
-                        "密码,重置,登录,忘记", kcats[2]},
-                {"如何申请退款", "满足条件的订单可在 7 天内申请退款，退款原路返回。",
-                        "**退款条件**\n\n- 订单支付后 7 天内；\n- 服务未使用或未激活；\n- 无违反服务条款的行为。\n\n**申请方式**\n\n在「账单中心 - 订单详情」点击「申请退款」，填写原因后提交，1-3 个工作日审核。",
-                        "退款,申请,订单,退费", kcats[3]},
-                {"如何导出数据报表", "支持按时间范围导出 CSV 与 Excel 格式的数据报表。",
-                        "**导出步骤**\n\n1. 进入「数据中心 - 报表」。\n2. 选择时间范围与指标维度。\n3. 点击「导出」，选择格式。\n\n> 单次导出上限 10 万条记录。",
-                        "导出,报表,数据,CSV,Excel", kcats[0]},
-                {"如何绑定手机号", "绑定手机号后可增强账号安全性并用于找回密码。",
-                        "**绑定步骤**\n\n1. 进入「个人中心 - 安全设置」。\n2. 点击「绑定手机号」。\n3. 输入手机号并完成短信验证。",
-                        "手机号,绑定,安全", kcats[2]},
-                {"如何开启二次验证", "开启两步验证可为账号增加额外保护层。",
-                        "**开启方式**\n\n1. 安全设置中选择「两步验证」。\n2. 下载身份验证器 App 并扫码。\n3. 输入动态码完成绑定。",
-                        "二次验证,两步验证,安全,2FA", kcats[2]},
-                {"套餐如何升级", "支持随时升级套餐，费用按剩余天数折算。",
-                        "**升级方式**\n\n进入「账户中心 - 套餐管理」，选择目标套餐后确认，差价按天折算，立即生效。",
-                        "套餐,升级,续费", kcats[3]},
-                {"为什么登录一直失败", "登录失败常见原因及排查方法。",
-                        "**常见原因**\n\n- 账号或密码错误；\n- 账号被禁用；\n- 网络或缓存问题。\n\n**解决**\n\n核对账号密码 → 清除浏览器缓存 → 仍失败则联系客服。",
-                        "登录,失败,排查", kcats[1]},
-                {"如何联系人工客服", "多种渠道联系人工客服的方式。",
-                        "**渠道**\n\n- 在线提交工单；\n- 客服电话 400-800-8888；\n- 邮件 support@example.com。\n\n工单平均响应时间小于 2 小时。",
-                        "人工客服,联系,电话,工单", kcats[1]},
-                {"发票如何申请", "支持开具电子增值税普通发票与专用发票。",
-                        "**申请方式**\n\n「账单中心 - 发票管理」填写抬头与税号后提交，电子发票 1 个工作日内开具。",
-                        "发票,开票,税号", kcats[3]},
-                {"API 如何接入", "开发者可通过开放 API 接入平台能力。",
-                        "**接入步骤**\n\n1. 在「开发者中心」创建应用获取 AppKey。\n2. 阅读接口文档。\n3. 使用签名方式调用接口。",
-                        "API,接入,开发,AppKey", kcats[0]},
-        };
+    /** 补齐最近 7 天的工单量：每天不足目标条数时补建，已达目标的日期不再重复插入 */
+    private void ensureRecentTickets() {
+        try {
+            List<Long> agents = jdbc.queryForList(
+                    "SELECT id FROM sys_user WHERE role = 'AGENT' AND status = 1 ORDER BY id", Long.class);
+            List<Long> customers = jdbc.queryForList(
+                    "SELECT id FROM sys_user WHERE role = 'CUSTOMER' AND status = 1 ORDER BY id", Long.class);
+            List<Map<String, Object>> cats = jdbc.queryForList(
+                    "SELECT id, sla_hours FROM ticket_category WHERE status = 1 ORDER BY id");
+            if (agents.isEmpty() || customers.isEmpty() || cats.isEmpty()) {
+                return;
+            }
+            // 索引 0 为今天，其余依次为前 1~6 天；整体较前期抬升，趋势图上能看到近期放量
+            int[] targets = {58, 64, 61, 69, 56, 63, 60};
+            Random rnd = new Random(20261029L);
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            LocalDateTime now = LocalDateTime.now();
+            int created = 0;
+
+            for (int d = 0; d < targets.length; d++) {
+                LocalDate day = LocalDate.now().minusDays(d);
+                LocalDateTime dayStart = day.atStartOfDay().plusHours(8);
+                // 今天只统计到当前时刻，避免把工单时间写到未来
+                LocalDateTime dayEnd = d == 0 ? now : day.atStartOfDay().plusHours(21);
+                if (!dayEnd.isAfter(dayStart)) {
+                    continue;
+                }
+                Long exists = jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM ticket WHERE created_at >= ? AND created_at < ?", Long.class,
+                        day.atStartOfDay(), day.plusDays(1).atStartOfDay());
+                int target = d == 0
+                        ? (int) Math.round(targets[0] * Math.min(dayEnd.getHour() + dayEnd.getMinute() / 60.0, 24) / 24.0)
+                        : targets[d];
+                int need = target - (exists == null ? 0 : exists.intValue());
+                long spanMinutes = Math.max(Duration.between(dayStart, dayEnd).toMinutes(), 1);
+                for (int i = 0; i < need; i++) {
+                    created += insertRecentTicket(dayStart, dayEnd, spanMinutes, d == 0,
+                            customers, agents, cats, rnd, fmt);
+                }
+            }
+            if (created > 0) {
+                log.info("近期工单数据补充完成：新增 {} 条", created);
+            }
+        } catch (Exception e) {
+            log.warn("近期工单数据补充失败（不影响启动）：{}", e.getMessage());
+        }
     }
 
-    /** 补充知识文章内容 */
-    private Object[][] extraArticles(long[] kcats) {
-        return new Object[][]{
-                {"登录后频繁掉线怎么办", "Cookie/Token 过期或网络波动导致掉线的排查方法。",
-                        "**可能原因**\n\n1. 登录状态有效期已过，重新登录即可；\n2. 浏览器开启了「退出时清除 Cookie」；\n3. 公司网络代理导致会话不稳定。\n\n**建议**\n\n- 勾选登录页「记住账号」；\n- 将平台地址加入浏览器信任站点。",
-                        "掉线,登录状态,Cookie,过期", kcats[1]},
-                {"收不到短信验证码", "验证码未到达的常见原因与解决办法。",
-                        "**排查清单**\n\n1. 检查手机是否开启短信拦截；\n2. 确认信号正常，欠费停机会拦截短信；\n3. 验证码 60 秒后可重新发送，每日上限 10 条；\n4. 仍收不到请联系客服更换验证方式。",
-                        "验证码,短信,收不到,手机", kcats[1]},
-                {"如何修改绑定的手机号", "更换手机号的安全验证流程。",
-                        "**操作步骤**\n\n1. 进入「个人中心 - 安全设置」；\n2. 点击「更换手机号」；\n3. 通过旧手机号短信验证；\n4. 绑定新手机号。\n\n> 旧手机号不可用时，请提交工单并提供身份证明材料。",
-                        "手机号,更换,修改,绑定", kcats[2]},
-                {"账号被盗如何处理", "发现账号异常后的紧急处理步骤。",
-                        "**紧急处理**\n\n1. 立即修改密码并退出所有登录设备；\n2. 开启两步验证；\n3. 检查账单是否存在异常消费；\n4. 提交工单冻结账号。\n\n> 平台不会以任何形式索要您的密码和验证码。",
-                        "盗号,安全,冻结,异常", kcats[2]},
-                {"退款多久到账", "退款审核通过后的到账时间说明。",
-                        "**到账时间**\n\n- 支付宝/微信支付：1-3 个工作日原路退回；\n- 银行卡支付：3-7 个工作日；\n- 对公转账：5-10 个工作日。\n\n审核通过后可在「账单中心 - 退款记录」查看进度。",
-                        "退款,到账,时间,原路退回", kcats[3]},
-                {"如何下载发票", "电子发票的下载与报销使用说明。",
-                        "**下载步骤**\n\n1. 进入「账单中心 - 发票管理」；\n2. 找到已开具的发票，点击「下载」；\n3. 获取 PDF 版式文件，可用于报销。\n\n电子发票与纸质发票具有同等法律效力。",
-                        "发票,下载,报销,PDF", kcats[3]},
-                {"套餐到期不续费会怎样", "套餐到期后的服务状态说明。",
-                        "**到期规则**\n\n- 到期后进入 15 天宽限期，功能受限但数据保留；\n- 宽限期后数据保留 90 天，可随时续费恢复；\n- 超过 90 天未续费，数据将被清除且无法恢复。",
-                        "套餐,到期,续费,宽限期", kcats[3]},
-                {"如何创建子账号并分配权限", "企业管理员创建子账号与权限分配指南。",
-                        "**操作步骤**\n\n1. 管理员进入「系统管理 - 用户管理」；\n2. 点击「新增用户」，填写信息并选择角色；\n3. 按角色自动获得对应功能权限；\n4. 子账号首次登录建议修改密码。",
-                        "子账号,权限,角色,管理员", kcats[0]},
-                {"工单处理流程是怎样的", "从提交到关闭的完整工单生命周期。",
-                        "**流程说明**\n\n1. 提交工单 → 系统自动分类；\n2. 客服主管分配处理人；\n3. 客服接单并跟进处理；\n4. 给出解决方案，客户确认；\n5. 客户评价后工单关闭。\n\n每个环节都会收到站内通知。",
-                        "工单,流程,生命周期,处理", kcats[0]},
-                {"如何提高 AI 问答准确率", "让智能助手更准确回答的技巧。",
-                        "**使用技巧**\n\n1. 用具体关键词描述问题，如「导出 Excel 报表乱码」；\n2. 避免一句话包含多个问题；\n3. 可补充产品版本、报错截图文字等信息；\n4. AI 无法解答时会引导转人工。",
-                        "AI,问答,技巧,准确率", kcats[1]},
-                {"批量导入客户数据的方法", "使用 Excel 模板批量导入客户数据。",
-                        "**导入步骤**\n\n1. 进入「客户管理」点击「批量导入」；\n2. 下载标准模板并按格式填写；\n3. 上传文件，系统自动校验；\n4. 校验通过后确认导入。\n\n> 单次上限 5000 条，重复数据自动跳过。",
-                        "批量导入,客户,Excel,模板", kcats[0]},
-                {"消息通知如何设置", "站内通知与邮件通知的配置方法。",
-                        "**配置入口**\n\n「个人中心 - 通知设置」可选择：\n\n- 工单状态变更提醒；\n- 系统公告提醒；\n- 邮件通知开关。\n\n保存后立即生效。",
-                        "通知,提醒,邮件,设置", kcats[1]},
-                {"接口调用出现 429 限流怎么办", "API 调用触发限流的处理建议。",
-                        "**说明**\n\n为保障服务稳定，平台对 API 调用频率做了限制：\n\n- 登录接口：1 分钟内最多 10 次；\n- AI 问答：1 分钟内最多 20 次。\n\n收到 429 响应请稍后重试，避免高频轮询，建议使用 WebSocket 或轮询间隔不低于 5 秒。",
-                        "限流,429,API,频率", kcats[1]},
-                {"如何注销账号", "账号注销的条件与数据清除说明。",
-                        "**注销条件**\n\n- 账号无进行中的工单；\n- 无未结算账单；\n- 身份验证通过。\n\n提交注销申请后进入 15 天冷静期，期间登录可撤销。注销后所有数据将被永久删除。",
-                        "注销,账号,删除,冷静期", kcats[2]},
-                {"升级套餐后费用如何计算", "套餐升降级的费用折算规则。",
-                        "**计算规则**\n\n- 升级：差价按剩余天数折算，立即支付生效；\n- 降级：次月生效，当月按原套餐执行；\n- 具体金额在下单页实时预览。",
-                        "套餐,费用,折算,升级降级", kcats[3]},
-                {"数据安全与隐私保护说明", "平台的数据安全措施说明。",
-                        "**安全保障**\n\n1. 传输全程 TLS 加密；\n2. 密码采用 PBKDF2 单向哈希存储；\n3. 敏感操作全程审计日志；\n4. 数据每日异地备份。\n\n平台严格遵循个人信息保护相关法规。",
-                        "安全,隐私,加密,备份", kcats[2]},
-                {"工单被驳回怎么处理", "工单信息不完整被退回的处理方法。",
-                        "**处理方式**\n\n查看驳回原因（站内通知可查）：\n\n- 信息不全 → 编辑补充后重新提交；\n- 重复提交 → 等待原工单处理；\n- 类型错误 → 修改分类后重新提交。",
-                        "工单,驳回,重新提交", kcats[0]},
-                {"如何查看操作日志", "系统操作审计日志的查看方法。",
-                        "**查看入口**\n\n管理员进入「系统管理 - 操作日志」，可按：\n\n- 操作人；\n- 操作类型；\n- 时间范围。\n\n筛选查询，日志保留 180 天。",
-                        "日志,审计,操作记录", kcats[0]},
-                {"客服响应时间是多久", "不同渠道的响应时效说明。",
-                        "**响应时效**\n\n- 在线工单：平均 2 小时内响应，工作时间 9:00-21:00；\n- 紧急电话：7×24 小时；\n- 邮件：1 个工作日内回复。\n\n紧急问题建议电话 + 工单双渠道提交。",
-                        "响应时间,时效,客服,SLA", kcats[1]},
-                {"多设备同时登录会冲突吗", "多端登录策略说明。",
-                        "**登录策略**\n\n- 同一账号最多 3 台设备同时在线；\n- 网页端与移动端数据实时同步；\n- 异地登录会收到安全提醒。\n\n可在「安全设置 - 登录设备」中强制下线其他设备。",
-                        "多设备,登录,同步,下线", kcats[2]},
-        };
+    /** 补建单条近期工单（含时间线与消息），返回 1 表示成功、0 表示跳过 */
+    private int insertRecentTicket(LocalDateTime dayStart, LocalDateTime dayEnd, long spanMinutes,
+                                   boolean today, List<Long> customers, List<Long> agents,
+                                   List<Map<String, Object>> cats, Random rnd, DateTimeFormatter fmt) {
+        String title = RECENT_TITLES[rnd.nextInt(RECENT_TITLES.length)];
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime createdAt = dayStart.plusMinutes((long) rnd.nextInt((int) spanMinutes));
+        if (createdAt.isAfter(now.minusMinutes(10))) {
+            createdAt = now.minusMinutes(10);
+        }
+        Map<String, Object> cat = cats.get(rnd.nextInt(cats.size()));
+        long categoryId = ((Number) cat.get("id")).longValue();
+        int slaHours = cat.get("sla_hours") == null ? 24 : ((Number) cat.get("sla_hours")).intValue();
+
+        // 当天创建的工单只可能处于进行中状态，避免出现解决时间早于创建时间的脏数据
+        String status = today
+                ? weighted(new String[]{"PENDING", "ASSIGNED", "PROCESSING", "WAITING"},
+                new double[]{0.22, 0.18, 0.52, 0.08}, rnd)
+                : weighted(new String[]{"PENDING", "ASSIGNED", "PROCESSING", "WAITING", "RESOLVED", "CLOSED"},
+                new double[]{0.14, 0.13, 0.24, 0.04, 0.25, 0.20}, rnd);
+        String priority = weighted(new String[]{"URGENT", "HIGH", "MEDIUM", "LOW"},
+                new double[]{0.08, 0.24, 0.52, 0.16}, rnd);
+        String[] sources = {"WEB", "PHONE", "EMAIL", "WECHAT"};
+        String source = sources[rnd.nextInt(sources.length)];
+        Long customerId = customers.get(rnd.nextInt(customers.size()));
+        boolean pending = "PENDING".equals(status);
+        Long assigneeId = pending ? null : agents.get(rnd.nextInt(agents.size()));
+
+        LocalDateTime slaResponseAt = createdAt.plusHours(2);
+        LocalDateTime slaResolveAt = createdAt.plusHours(slaHours);
+        LocalDateTime firstResponseAt = pending ? null : createdAt.plusMinutes(5 + rnd.nextInt(120));
+        if (firstResponseAt != null && firstResponseAt.isAfter(now)) {
+            firstResponseAt = now.minusMinutes(1);
+        }
+        LocalDateTime resolvedAt = null;
+        LocalDateTime closedAt = null;
+        String solution = null;
+        Integer satisfaction = null;
+        String feedback = null;
+
+        if ("RESOLVED".equals(status) || "CLOSED".equals(status)) {
+            // 解决时间取首次响应后 30~540 分钟，且必须早于当前时刻，否则降级为处理中
+            LocalDateTime base = firstResponseAt == null ? createdAt : firstResponseAt;
+            LocalDateTime candidate = base.plusMinutes(30 + rnd.nextInt(511));
+            if (candidate.isAfter(now)) {
+                status = "PROCESSING";
+            } else {
+                resolvedAt = candidate;
+                solution = "已协助客户处理：" + title + "。\n如仍有疑问欢迎随时联系。";
+                satisfaction = 3 + rnd.nextInt(3);
+                feedback = rnd.nextBoolean() ? "处理得很及时，非常满意。" : "问题已解决，谢谢。";
+                if ("CLOSED".equals(status)) {
+                    LocalDateTime closeCandidate = resolvedAt.plusMinutes(30 + rnd.nextInt(600));
+                    if (closeCandidate.isAfter(now)) {
+                        status = "RESOLVED";
+                    } else {
+                        closedAt = closeCandidate;
+                    }
+                }
+            }
+        }
+        // 最后一次变更时间用于 updated_at
+        LocalDateTime lastTouch = closedAt != null ? closedAt : (resolvedAt != null ? resolvedAt : createdAt);
+
+        String ticketNo = "ISD" + createdAt.format(DateTimeFormatter.ofPattern("yyMMddHHmmss"))
+                + String.format("%03d", rnd.nextInt(1000));
+        try {
+            Long ticketId = insertAndGetId(
+                    "INSERT INTO ticket(ticket_no,title,description,customer_id,assignee_id,category_id," +
+                            "priority,status,source,solution,satisfaction,feedback,sla_response_at,sla_resolve_at," +
+                            "first_response_at,resolved_at,closed_at,reopen_count,created_at,updated_at) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ticketNo, title, "客户反馈：" + title + "。\n期望尽快处理，谢谢。",
+                    customerId, assigneeId, categoryId, priority, status, source, solution, satisfaction, feedback,
+                    slaResponseAt.format(fmt), slaResolveAt.format(fmt),
+                    fmt(firstResponseAt, fmt), fmt(resolvedAt, fmt), fmt(closedAt, fmt),
+                    0, createdAt.format(fmt), lastTouch.format(fmt));
+
+            jdbc.update("INSERT INTO ticket_history(ticket_id,operator_id,action,old_value,new_value,remark,created_at) " +
+                            "VALUES(?,?,?,?,?,?,?)",
+                    ticketId, customerId, "CREATE", null, "PENDING", "客户创建工单", createdAt.format(fmt));
+            if (assigneeId != null) {
+                jdbc.update("INSERT INTO ticket_history(ticket_id,operator_id,action,old_value,new_value,remark,created_at) " +
+                                "VALUES(?,?,?,?,?,?,?)",
+                        ticketId, assigneeId, "ASSIGN", "PENDING", "ASSIGNED", "工单已分派",
+                        createdAt.plusMinutes(5).format(fmt));
+            }
+            if (resolvedAt != null) {
+                jdbc.update("INSERT INTO ticket_history(ticket_id,operator_id,action,old_value,new_value,remark,created_at) " +
+                                "VALUES(?,?,?,?,?,?,?)",
+                        ticketId, assigneeId, "RESOLVE", "PROCESSING", "RESOLVED", "提交解决方案", resolvedAt.format(fmt));
+            }
+            jdbc.update("INSERT INTO ticket_message(ticket_id,sender_id,message_type,content,created_at) VALUES(?,?,?,?,?)",
+                    ticketId, customerId, "PUBLIC", "客户反馈：" + title + "，麻烦帮忙看一下。", createdAt.format(fmt));
+            if (assigneeId != null && firstResponseAt != null) {
+                jdbc.update("INSERT INTO ticket_message(ticket_id,sender_id,message_type,content,created_at) VALUES(?,?,?,?,?)",
+                        ticketId, assigneeId, "PUBLIC", RECENT_REPLIES[rnd.nextInt(RECENT_REPLIES.length)],
+                        firstResponseAt.format(fmt));
+            }
+            return 1;
+        } catch (Exception e) {
+            // 单号冲突等偶发失败直接跳过，不影响其余数据
+            return 0;
+        }
     }
 
     /** 批量生成演示工单数据 */

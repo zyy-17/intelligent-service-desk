@@ -45,8 +45,8 @@
                      :page-size="query.pageSize" :current-page="query.page" @current-change="onPage" />
     </div>
 
-    <!-- 详情弹窗 -->
-    <el-dialog v-model="detailVisible" width="780px" top="6vh">
+    <!-- 详情弹窗：宽高约占主内容区的 75%，在右侧区域居中 -->
+    <el-dialog v-model="detailVisible" class="kb-detail-dialog" top="12.5vh" :close-on-click-modal="false">
       <template #header>
         <div class="kb-dlg-head">
           <span>知识库</span>
@@ -392,7 +392,7 @@ onMounted(() => {
 .kb-dlg-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
 .kb-crumb-sep { color: #cbd5e1; }
 .kb-crumb-cur { color: var(--text-main); font-weight: 600; }
-.kb-detail { max-height: 64vh; overflow-y: auto; padding-right: 6px; }
+.kb-detail { height: 100%; overflow-y: auto; padding-right: 6px; }
 .kb-title { margin: 0 0 10px; font-size: 20px; font-weight: 700; line-height: 1.45; color: #1e2c5c; }
 .kb-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .kb-chip { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; }
@@ -414,7 +414,7 @@ onMounted(() => {
   background: #f8fafc; border-left: 3px solid #bfdbfe;
   padding: 10px 12px; border-radius: 0 8px 8px 0;
 }
-.kb-body { font-size: 13.5px; line-height: 1.85; color: #334155; }
+.kb-body { font-size: 14px; line-height: 1.9; color: #334155; }
 .kb-body :deep(h3) { font-size: 14.5px; margin: 14px 0 8px; color: #1e2c5c; }
 .kb-body :deep(h4) { font-size: 13.5px; margin: 12px 0 6px; color: #1e2c5c; }
 .kb-body :deep(p) { margin: 0 0 10px; }
@@ -449,4 +449,39 @@ onMounted(() => {
 }
 .kb-dlg-foot { display: flex; align-items: center; justify-content: space-between; }
 .kb-foot-left { display: flex; gap: 8px; }
+</style>
+
+<style>
+/* 详情弹窗：宽高各取主内容区（左侧导航 230px 之外的区域）的 75%，并在右侧区域水平垂直居中 */
+.kb-detail-dialog {
+  width: calc((100vw - 230px) * 0.75) !important;
+  max-width: none;
+  height: 75vh;
+  display: flex;
+  flex-direction: column;
+  margin-left: calc(230px + (100vw - 230px) * 0.125) !important;
+  margin-right: 0 !important;
+  padding: 0;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.kb-detail-dialog .el-dialog__header {
+  flex: none; margin: 0; padding: 18px 24px 12px;
+  border-bottom: 1px solid #eef2f7;
+}
+.kb-detail-dialog .el-dialog__body {
+  flex: 1; min-height: 0; overflow: hidden;
+  padding: 16px 24px 0;
+}
+.kb-detail-dialog .el-dialog__footer {
+  flex: none; padding: 12px 24px 16px;
+  border-top: 1px solid #eef2f7;
+}
+/* 窄屏时改为几乎占满右侧区域，避免正文过窄 */
+@media (max-width: 1280px) {
+  .kb-detail-dialog {
+    width: calc((100vw - 230px) * 0.92) !important;
+    margin-left: calc(230px + (100vw - 230px) * 0.04) !important;
+  }
+}
 </style>
