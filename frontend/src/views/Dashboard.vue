@@ -119,8 +119,18 @@
 
     <!-- ================= 管理端 / 客服工作台（原有布局） ================= -->
     <template v-else>
-      <!-- 顶部欢迎语 -->
-      <div class="welcome">
+      <!-- 客服工作台横幅 -->
+      <section class="agent-hero" v-if="isAgent">
+        <div class="ah-main">
+          <h2 class="ah-title">你好，{{ auth.displayName }}！<span class="ah-wave">👋</span></h2>
+          <p class="ah-sub">用专业的服务，解决每一个问题，让客户更满意。</p>
+          <p class="ah-date">今天是 {{ today }}，以下是今日服务概况</p>
+        </div>
+        <img class="ah-illus" :src="agentHero" alt="" aria-hidden="true" />
+      </section>
+
+      <!-- 管理端欢迎语 -->
+      <div class="welcome" v-if="!isAgent">
         <div>
           <h2>您好，{{ auth.displayName }}，欢迎回来！</h2>
           <p>今天是 {{ today }}，以下是今日服务概况。</p>
@@ -128,7 +138,7 @@
       </div>
 
       <!-- KPI 卡片 -->
-      <div class="kpi-row">
+      <div class="kpi-row" :class="{ 'kpi-cols-4': isAgent }">
         <div class="kpi-card" v-for="k in kpiCards" :key="k.label">
           <div class="kpi-icon" :style="{ background: k.bg, color: k.color }">
             <el-icon :size="22"><component :is="k.icon" /></el-icon>
@@ -326,6 +336,7 @@ import { useAuthStore } from '../store/auth'
 import api from '../api'
 import * as echarts from 'echarts'
 import botAvatar from '../assets/ai-bot-avatar.png'
+import agentHero from '../assets/agent-hero.png'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -571,6 +582,48 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 16px;
 }
+/* ================= 客服工作台横幅 ================= */
+.agent-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 182px;
+  padding: 24px 250px 24px 34px;
+  border-radius: 18px;
+  overflow: hidden;
+  /* 光晕用径向渐变（不会产生硬边）；右侧约 25% 保持纯渐变，避免插画 multiply 显出色块 */
+  background:
+    radial-gradient(430px 250px at 54% -70px, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(320px 210px at 30% 132%, rgba(147, 197, 253, 0.38), rgba(147, 197, 253, 0) 70%),
+    linear-gradient(112deg, #eef4ff 0%, #dbe9ff 46%, #c8ddfd 100%);
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.10);
+}
+/* 插画白底在浅蓝渐变上用 multiply 融合，等同透明 */
+.ah-main { position: relative; z-index: 2; min-width: 0; }
+.ah-title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: #16265c;
+  letter-spacing: 0.5px;
+}
+.ah-wave { margin-left: 2px; font-size: 23px; }
+.ah-sub { margin: 9px 0 0; font-size: 13.5px; color: #47598a; }
+.ah-date { margin: 6px 0 0; font-size: 12px; color: #7d8cb8; }
+/* 插画白底在浅蓝渐变上用 multiply 融合，等同透明 */
+.ah-illus {
+  position: absolute;
+  right: 26px;
+  bottom: 0;
+  height: 182px;
+  width: auto;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+  mix-blend-mode: multiply;
+}
+
 .welcome h2 { margin: 0 0 4px; font-size: 20px; }
 .welcome p { margin: 0; color: var(--text-sub); font-size: 14px; }
 
@@ -839,6 +892,8 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(5, 1fr);
   gap: 16px;
 }
+/* 客服视角只有 4 张卡，按 4 列铺满（否则会右侧空出 1/5） */
+.kpi-row.kpi-cols-4 { grid-template-columns: repeat(4, 1fr); }
 .kpi-card {
   background: #fff;
   border-radius: 12px;
@@ -946,7 +1001,12 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1200px) {
   .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .kpi-row.kpi-cols-4 { grid-template-columns: repeat(2, 1fr); }
   .grid-3 { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 900px) {
+  .agent-hero { padding-right: 34px; }
+  .ah-illus { display: none; }
 }
 </style>
