@@ -35,6 +35,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 - 🤖 **AI 智能问答**：云端大模型（OpenAI 兼容）RAG + 知识库检索降级，支持多轮会话上下文
 - 📊 **数据统计**：状态 / 优先级 / 满意度分布、客服工作量、趋势图
 - ⚙️ **系统管理**：用户角色、工单分类、审计日志
+- ⏰ **演示定时任务**：可配置每天自动生成工单并模拟客服处理（默认关闭）
 - 🛡️ **安全防护**：JWT 认证、接口级 + 资源级权限校验、PBKDF2 密码哈希、内部备注隔离、接口限流、工单幂等
 
 ---
@@ -247,6 +248,8 @@ intelligent-service-desk/
 │   │   ├── JwtUtil.java              # JWT 工具
 │   │   └── PasswordUtil.java         # PBKDF2 密码哈希
 │   ├── common/                       # 统一响应、分页、异常
+│   ├── job/
+│   │   └── AutoTicketJob.java        # 演示定时任务：每天自动造单 + 模拟客服处理
 │   └── config/                       # 配置、数据初始化
 │       ├── DataSeeder.java           # 演示数据初始化（幂等）
 │       └── MigrationRunner.java      # 启动时自动补列
@@ -749,6 +752,39 @@ java -jar target/intelligent-service-desk-0.0.1-SNAPSHOT.jar
 > ⚠️ 若环境变量存在 `PORT` 或 `SERVER_PORT`/`SERVER__PORT`（如某些 IDE/工具注入），会被 Spring Boot 的 relaxed binding 映射为 `server.port` 导致端口冲突，请显式指定端口规避：`java -jar xxx.jar --server.port=8080`
 
 > 💡 **登录跳转提示**：登录成功后前端按后端下发的角色菜单跳转工作台；若登录后无法跳转，多为后端仍在运行旧代码（回退/改动后未重启），重启后端即可恢复。
+
+### 定时任务：每天自动造单（演示用，默认关闭）
+
+内置 `AutoTicketJob`（`@Scheduled`）会在设定时间自动创建工单，并按比例**模拟客服接管、回复、解决**，
+让演示环境的工单数据每天都“活”起来。默认关闭，开启后需重启后端。
+
+开关与参数都在 `application.yml` 的 `app.demo.auto-ticket` 下：
+
+```yaml
+app:
+  demo:
+    auto-ticket:
+      enabled: true          # 或环境变量 DEMO_AUTO_TICKET=true
+      cron: "0 0 9 * * ?"    # 每天 09:00（DEMO_AUTO_TICKET_CRON）
+      count: 5               # 每次生成 5 条（DEMO_AUTO_TICKET_COUNT）
+      resolve-percent: 60    # 60% 自动模拟客服解决，其余留在「待分配」（DEMO_AUTO_TICKET_RESOLVE_PERCENT）
+```
+
+生成的数据是**真实落库**的：客户从现有 `CUSTOMER` 账号随机抽取，分类按模板匹配现有 `ticket_category`，
+优先级随机；自动解决的那部分会完整写入
+`ticket`（状态 `RESOLVED`、解决方案、满意度、响应/解决时间）、`ticket_message`（客服回复 + 客户确认）
+和 `ticket_history`（CREATE → ASSIGN → ACCEPT → RESOLVE → CONFIRM），
+因此在工单列表、详情时间线、数据统计里看起来和真人操作一致。剩下 40% 停在「待分配」，等客服在大厅申请或主管分配。
+
+不想等到第二天验证？用管理员账号手动触发一次：
+
+```bash
+curl -X POST "http://localhost:8080/api/admin/demo/auto-ticket?count=5" \
+     -H "Authorization: Bearer <ADMIN_TOKEN>"
+# → {"created":5,"resolved":3,"pending":2,"ticketNos":["ISD...", ...]}
+```
+
+> 该接口仅 `ADMIN` 可调用；未开启开关时返回提示而不是静默失败。
 
 ### 第三步：前端（可选，开发模式）
 

@@ -17,9 +17,24 @@ import java.util.Map;
 public class AdminController {
 
     private final AdminService adminService;
+    private final org.springframework.beans.factory.ObjectProvider<com.zyyqq.desk.job.AutoTicketJob> autoTicketJob;
 
-    public AdminController(AdminService adminService) {
+    public AdminController(AdminService adminService,
+                           org.springframework.beans.factory.ObjectProvider<com.zyyqq.desk.job.AutoTicketJob> autoTicketJob) {
         this.adminService = adminService;
+        this.autoTicketJob = autoTicketJob;
+    }
+
+    /** 手动触发一次自动造单（便于立即验证定时任务，定时任务默认每天 09:00） */
+    @PostMapping("/demo/auto-ticket")
+    @RequireRole({"ADMIN"})
+    public ApiResponse<Map<String, Object>> autoTicket(@RequestParam(defaultValue = "5") int count) {
+        com.zyyqq.desk.job.AutoTicketJob job = autoTicketJob.getIfAvailable();
+        if (job == null) {
+            throw new com.zyyqq.desk.common.BizException(
+                    "自动造单未开启，请在 application.yml 设置 app.demo.auto-ticket.enabled=true 后重启服务");
+        }
+        return ApiResponse.ok(job.generate(count));
     }
 
     /** 用户列表（可按角色过滤） */

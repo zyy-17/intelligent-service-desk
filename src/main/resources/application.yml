@@ -85,6 +85,18 @@ app:
     categories-ttl: 600
     stats-overview-ttl: 60
 
+  # ===== 演示数据（定时自动造单）=====
+  # 每天定时创建工单并按比例模拟客服处理，默认关闭，避免影响真实数据
+  demo:
+    auto-ticket:
+      enabled: ${DEMO_AUTO_TICKET:false}
+      # 执行时间：默认每天 09:00
+      cron: "${DEMO_AUTO_TICKET_CRON:0 0 9 * * ?}"
+      # 每次生成的工单数量
+      count: ${DEMO_AUTO_TICKET_COUNT:5}
+      # 自动模拟客服处理并解决的比例（0-100），其余留在「待分配」等真人处理
+      resolve-percent: ${DEMO_AUTO_TICKET_RESOLVE_PERCENT:60}
+
 logging:
   level:
     root: INFO
