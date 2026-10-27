@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
-/** 知识库接口：分类、文章增删改查、热门与详情 */
+/** 知识库接口：分类、文章增删改查、排序与收藏、热门与详情 */
 @RestController
 @RequestMapping("/api/knowledge")
 public class KnowledgeController {
@@ -27,12 +27,14 @@ public class KnowledgeController {
         return ApiResponse.ok(knowledgeService.categories());
     }
 
-    /** 文章分页列表（支持关键字） */
+    /** 文章分页列表（支持关键字、排序与只看我的收藏） */
     @GetMapping
     public ApiResponse<?> list(@RequestParam(defaultValue = "1") int page,
                                @RequestParam(defaultValue = "10") int pageSize,
-                               @RequestParam(required = false) String keyword) {
-        return ApiResponse.ok(knowledgeService.list(page, pageSize, keyword));
+                               @RequestParam(required = false) String keyword,
+                               @RequestParam(defaultValue = "newest") String sort,
+                               @RequestParam(defaultValue = "false") boolean onlyFavorite) {
+        return ApiResponse.ok(knowledgeService.list(page, pageSize, keyword, sort, onlyFavorite));
     }
 
     /** 热门文章 */
@@ -43,8 +45,20 @@ public class KnowledgeController {
 
     /** 文章详情 */
     @GetMapping("/{id}")
-    public ApiResponse<KnowledgeArticle> detail(@PathVariable Long id) {
+    public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {
         return ApiResponse.ok(knowledgeService.detail(id));
+    }
+
+    /** 收藏文章（任意身份均可） */
+    @PostMapping("/{id}/favorite")
+    public ApiResponse<Map<String, Object>> favorite(@PathVariable Long id) {
+        return ApiResponse.ok(knowledgeService.favorite(id));
+    }
+
+    /** 取消收藏 */
+    @DeleteMapping("/{id}/favorite")
+    public ApiResponse<Map<String, Object>> unfavorite(@PathVariable Long id) {
+        return ApiResponse.ok(knowledgeService.unfavorite(id));
     }
 
     /** 新增或更新文章（仅主管与管理员可维护知识库，客服与客户只读） */

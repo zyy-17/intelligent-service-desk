@@ -31,7 +31,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 - 🎫 **工单全生命周期**：创建 → 分配 → 接单 → 处理 → 提交方案 → 客户确认 → 关闭 / 重开，完整状态机流转
 - 👥 **多角色协作**：客户 / 客服人员 / 客服主管 / 系统管理员四种身份，各自拥有独立的功能与数据权限
-- 📚 **知识库管理**：文章分类、编辑、审核、发布、热门排行、全文检索
+- 📚 **知识库管理**：文章分类、编辑、审核、发布、热门排行、全文检索，支持**收藏**与按收藏量/浏览量/发布时间排序
 - 🤖 **AI 智能问答**：云端大模型（OpenAI 兼容）RAG + 知识库检索降级，支持多轮会话上下文
 - 📊 **数据统计**：状态 / 优先级 / 满意度分布、客服工作量、趋势图
 - ⚙️ **系统管理**：用户角色、工单分类、审计日志
@@ -141,7 +141,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    ├─ 我的工单          提交工单、查看进度、回复、催办、确认、评价（仅本人工单）
    ├─ 知识库            自助查阅解决方案（只读，不显示新建/编辑/删除入口）
    ├─ AI 智能助手       AI 问答 + 多轮会话管理，支持从首页带问题直达
-   └─ 个人中心          资料修改、头像上传、修改密码
+   └─ 个人中心          资料修改、头像上传、修改密码、账户安全与工单/收藏统计
 ```
 
 > **数据边界**：客户端「我的工单」按 `ticket.customer_id = 当前用户` 过滤；客服端「工单管理」按
@@ -172,10 +172,12 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 📚 知识库
    ├─ 文章管理        分类、编辑、审核、发布、热门排行（仅 ADMIN/SUPERVISOR）
-   ├─ 详情弹窗        标题 + 分类/关键词标签 + 浏览/更新时间/来源 + 问题概述 + 正文
+   ├─ 详情弹窗        标题 + 分类/关键词标签 + 浏览/收藏/更新时间/来源 + 问题概述 + 正文
    │                  正文列表自动渲染为带编号的步骤卡片，便于照着排查
+   ├─ 收藏            任意身份都可收藏/取消收藏，卡片星标与详情页按钮双入口
+   ├─ 排序            最新发布 / 最早发布 / 收藏最多 / 浏览最多，另有「我的收藏」筛选
    ├─ 全文检索        关键词搜索（bigram 模糊匹配）
-   └─ 热门排行        按浏览量排序
+   └─ 收藏排行        按收藏量、浏览量排序（收藏量并列时按浏览量兜底）
 
 🤖 智能问答
    ├─ 多轮会话        新建/切换/删除会话、加载历史
@@ -185,7 +187,14 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 📊 数据统计
    ├─ 状态分布 / 优先级分布 / 满意度分布
    ├─ 客服工作量统计
-   └─ 工单趋势图
+   ├─ 工单趋势图
+   └─ 知识库表现      知识总数/总浏览/总收藏/篇均收藏 + Top 10 排行榜
+
+👤 个人中心（所有身份可从右上角头像进入）
+   ├─ 资料卡          头像、昵称、账户状态、注册时间 + 工单/收藏四项统计
+   │                  「知识收藏」可点击直达知识库的我的收藏
+   ├─ 账户资料        基本资料编辑、修改密码
+   └─ 账户安全        手机号 / 邮箱填写状态、登录密码、头像上传
 
 ⚙️ 系统管理
    ├─ 用户管理        角色分配、状态管理、密码重置
@@ -244,7 +253,7 @@ intelligent-service-desk/
 │
 ├── src/main/resources/
 │   ├── application.yml               # 主配置（数据源/Redis/AI 服务）
-│   ├── db/schema.sql                 # 建表脚本（10 张表）
+│   ├── db/schema.sql                 # 建表脚本（11 张表）
 │   └── static/                       # 前端构建产物
 │
 ├── frontend/                         # 🖥️ Vue 3 前端
@@ -305,9 +314,10 @@ intelligent-service-desk/
 | 5    | `ticket_history`     | 工单历史表     | id, ticket_id, action, operator_id, from_status, to_status   |
 | 6    | `knowledge_category` | 知识分类表     | id, name, sort_order                                         |
 | 7    | `knowledge_article`  | 知识文章表     | id, title, summary, body, category_id, keywords, status, view_count, published_at |
-| 8    | `notification`       | 通知表         | id, user_id, title, content, is_read                         |
-| 9    | `operation_log`      | 审计日志表     | id, operator_id, action, target, detail                      |
-| 10   | `ai_task_log`        | AI 任务日志表  | id, task_id, task_type, status, created_at                   |
+| 8    | `knowledge_favorite` | 知识收藏表     | id, article_id, user_id（唯一键去重）, created_at              |
+| 9    | `notification`       | 通知表         | id, user_id, title, content, is_read                         |
+| 10   | `operation_log`      | 审计日志表     | id, operator_id, action, target, detail                      |
+| 11   | `ai_task_log`        | AI 任务日志表  | id, task_id, task_type, status, created_at                   |
 
 ### 工单状态机
 
@@ -341,6 +351,7 @@ intelligent-service-desk/
 - **ticket → ticket_message**：一对多，一个工单含多条消息（公开回复/内部备注）
 - **ticket → ticket_history**：一对多，完整记录状态流转与操作轨迹
 - **knowledge_category → knowledge_article**：一对多
+- **knowledge_article → knowledge_favorite**：一对多（`(article_id, user_id)` 唯一，天然防重复收藏）
 - **sys_user → notification**：一对多
 
 ---
@@ -397,6 +408,10 @@ intelligent-service-desk/
 | POST | `/login`     | 用户登录，返回 JWT                | ❌    |
 | POST | `/register`  | 客户注册（含身份选择）            | ❌    |
 | POST | `/avatar`    | 上传头像（multipart）             | ✅    |
+| GET  | `/profile`   | 当前用户资料（含注册时间、状态）  | ✅    |
+| PUT  | `/profile`   | 更新昵称 / 邮箱 / 手机号          | ✅    |
+| GET  | `/profile/stats` | 个人中心统计（工单数、已解决、待处理、知识收藏数） | ✅ |
+| PUT  | `/password`  | 修改密码                          | ✅    |
 
 ### 工单模块 `/api/tickets`
 
@@ -421,12 +436,14 @@ intelligent-service-desk/
 
 | 方法 | 路径           | 说明                     | 认证 |
 | ---- | -------------- | ------------------------ | ---- |
-| GET  | `/`            | 文章分页列表             | ✅    |
+| GET  | `/`            | 文章分页列表，支持 `sort=newest/oldest/favorites/views` 与 `onlyFavorite=true` | ✅    |
 | GET  | `/categories`  | 分类列表（Redis 缓存）   | ✅    |
 | GET  | `/hot`         | 热门文章（Redis 缓存）   | ✅    |
-| GET  | `/{id}`        | 文章详情（浏览数 +1）    | ✅    |
+| GET  | `/{id}`        | 文章详情（浏览数 +1，含收藏量与本人收藏状态） | ✅    |
+| POST | `/{id}/favorite` | 收藏文章（任意身份，重复收藏幂等） | ✅   |
+| DELETE| `/{id}/favorite` | 取消收藏                | ✅    |
 | POST | `/`            | 新建 / 更新文章          | ✅ 仅 ADMIN/SUPERVISOR |
-| DELETE| `/{id}`       | 删除文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR |
+| DELETE| `/{id}`       | 删除文章（连带收藏，失效缓存） | ✅ 仅 ADMIN/SUPERVISOR |
 
 ### AI 问答模块 `/api/ai`
 
@@ -445,6 +462,7 @@ intelligent-service-desk/
 | 方法 | 路径                        | 说明                       | 认证 |
 | ---- | --------------------------- | -------------------------- | ---- |
 | GET  | `/api/stats/overview`       | 看板聚合统计（Redis 缓存） | ✅    |
+| GET  | `/api/stats/knowledge`      | 知识库表现：浏览/收藏汇总 + Top 文章 | ✅ 仅 ADMIN/SUPERVISOR |
 | GET  | `/api/search?q=`            | 全局搜索（工单/客户/知识） | ✅    |
 | GET  | `/api/notifications`        | 通知列表                   | ✅    |
 | GET  | `/api/notifications/unread-count` | 未读通知数            | ✅    |

@@ -34,6 +34,7 @@ public class DataSeeder implements CommandLineRunner {
             log.info("已存在用户数据，跳过演示数据初始化");
         }
         ensureKnowledge();
+        ensureFavorites();
     }
 
     /** 初始化用户、分类、知识、工单与通知 */
@@ -137,6 +138,38 @@ public class DataSeeder implements CommandLineRunner {
             log.info("知识库补充检查完成");
         } catch (Exception e) {
             log.warn("知识库补充失败（不影响启动）：{}", e.getMessage());
+        }
+    }
+
+    /** 首次启动时为演示数据补充知识收藏记录（幂等，已有收藏则跳过） */
+    private void ensureFavorites() {
+        try {
+            Long exists = jdbc.queryForObject("SELECT COUNT(*) FROM knowledge_favorite", Long.class);
+            if (exists != null && exists > 0) {
+                return;
+            }
+            List<Long> users = jdbc.queryForList("SELECT id FROM sys_user ORDER BY id", Long.class);
+            List<Long> articles = jdbc.queryForList(
+                    "SELECT id FROM knowledge_article WHERE status = 'PUBLISHED' ORDER BY id", Long.class);
+            if (users.isEmpty() || articles.isEmpty()) {
+                return;
+            }
+            Random rnd = new Random(7);
+            int added = 0;
+            for (Long articleId : articles) {
+                // 每篇文章随机 1~4 位用户收藏，保证收藏量有差异
+                List<Long> pool = new ArrayList<>(users);
+                java.util.Collections.shuffle(pool, rnd);
+                int n = Math.min(pool.size(), 1 + rnd.nextInt(4));
+                for (int i = 0; i < n; i++) {
+                    jdbc.update("INSERT IGNORE INTO knowledge_favorite(article_id, user_id) VALUES(?,?)",
+                            articleId, pool.get(i));
+                    added++;
+                }
+            }
+            log.info("知识库收藏演示数据初始化完成：{} 条", added);
+        } catch (Exception e) {
+            log.warn("知识库收藏演示数据初始化失败（不影响启动）：{}", e.getMessage());
         }
     }
 

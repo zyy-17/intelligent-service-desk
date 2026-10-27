@@ -17,9 +17,11 @@ import java.util.Map;
 public class StatsController {
 
     private final StatsService statsService;
+    private final com.zyyqq.desk.service.KnowledgeService knowledgeService;
 
-    public StatsController(StatsService statsService) {
+    public StatsController(StatsService statsService, com.zyyqq.desk.service.KnowledgeService knowledgeService) {
         this.statsService = statsService;
+        this.knowledgeService = knowledgeService;
     }
 
     /** 全站服务概况 */
@@ -45,5 +47,12 @@ public class StatsController {
     @RequireRole({"ADMIN", "SUPERVISOR"})
     public ApiResponse<List<Map<String, Object>>> teamPerformance() {
         return ApiResponse.ok(statsService.teamPerformance());
+    }
+
+    /** 知识库表现（主管/管理员）：浏览与收藏汇总 + Top 文章 */
+    @GetMapping("/knowledge")
+    @RequireRole({"ADMIN", "SUPERVISOR"})
+    public ApiResponse<Map<String, Object>> knowledge(@RequestParam(defaultValue = "8") int top) {
+        return ApiResponse.ok(knowledgeService.overview(top));
     }
 }

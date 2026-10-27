@@ -2,28 +2,43 @@
   <div class="knowledge">
     <div class="toolbar panel-card">
       <div class="filters">
-        <el-input v-model="keyword" placeholder="搜索知识标题 / 关键词" clearable style="width: 260px" :prefix-icon="Search" @keyup.enter="load" @clear="load" />
+        <el-input v-model="keyword" placeholder="搜索知识标题 / 关键词" clearable style="width: 240px" :prefix-icon="Search" @keyup.enter="load" @clear="load" />
         <el-button type="primary" :icon="Search" @click="load">搜索</el-button>
+        <!-- 排序：发布时间 / 收藏量 / 浏览量 -->
+        <el-select v-model="sort" class="sort-select" @change="onSortChange">
+          <el-option v-for="o in sortOptions" :key="o.value" :label="o.label" :value="o.value" />
+        </el-select>
+        <button class="fav-filter" :class="{ active: onlyFavorite }" @click="toggleOnlyFavorite">
+          <el-icon><StarFilled /></el-icon><span>我的收藏</span>
+        </button>
       </div>
       <el-button v-if="canManage" type="primary" :icon="Plus" @click="openEdit()">新建文章</el-button>
     </div>
 
-    <div class="kb-grid">
+    <div class="kb-grid" v-loading="loading">
       <div v-for="a in rows" :key="a.id" class="panel-card kb-card" @click="openDetail(a)">
         <div class="kb-card-head">
           <el-tag size="small" effect="light" :type="statusType(a.status)">{{ statusMap[a.status] }}</el-tag>
           <span class="kb-cat">{{ a.categoryName || '未分类' }}</span>
+          <!-- 收藏按钮：任何身份都可收藏，点击不打开详情 -->
+          <button class="fav-btn" :class="{ active: a.favorited }" :title="a.favorited ? '取消收藏' : '收藏'"
+                  @click.stop="toggleFav(a)">
+            <el-icon><StarFilled v-if="a.favorited" /><Star v-else /></el-icon>
+          </button>
         </div>
         <div class="kb-card-title">{{ a.title }}</div>
         <div class="kb-card-summary">{{ a.summary }}</div>
         <div class="kb-card-foot">
-          <span>{{ a.viewCount }} 次浏览</span>
+          <span class="kb-metrics">
+            <span class="m"><el-icon><View /></el-icon>{{ a.viewCount || 0 }}</span>
+            <span class="m" :class="{ on: a.favorited }"><el-icon><StarFilled /></el-icon>{{ a.favoriteCount || 0 }}</span>
+          </span>
           <span>{{ fmtTime(a.publishedAt || a.createdAt) }}</span>
         </div>
       </div>
     </div>
 
-    <el-empty v-if="!loading && rows.length === 0" description="暂无知识文章" />
+    <el-empty v-if="!loading && rows.length === 0" :description="onlyFavorite ? '你还没有收藏任何知识文章' : '暂无知识文章'" />
 
     <div class="pager" v-if="total > query.pageSize">
       <el-pagination background layout="total, prev, pager, next" :total="total"
@@ -54,6 +69,7 @@
         <!-- 元信息行 -->
         <div class="kb-metarow">
           <span class="mi"><el-icon><View /></el-icon>{{ current.viewCount || 0 }} 次浏览</span>
+          <span class="mi"><el-icon><StarFilled /></el-icon>{{ current.favoriteCount || 0 }} 人收藏</span>
           <span class="mi"><el-icon><Clock /></el-icon>更新于 {{ fmtTime(current.updatedAt || current.publishedAt || current.createdAt) }}</span>
           <span class="mi"><el-icon><UserFilled /></el-icon>{{ current.authorName || '系统知识库' }}</span>
         </div>
@@ -74,6 +90,12 @@
       <template #footer>
         <div class="kb-dlg-foot">
           <div class="kb-foot-left">
+            <!-- 收藏：所有身份可用 -->
+            <el-button size="small" :type="current?.favorited ? 'warning' : 'info'"
+                       :plain="!current?.favorited" :icon="current?.favorited ? StarFilled : Star"
+                       @click="toggleFav(current)">
+              {{ current?.favorited ? '已收藏' : '收藏' }}
+            </el-button>
             <template v-if="canManage">
               <el-button type="primary" size="small" @click="openEdit(current)">编辑</el-button>
               <el-button type="danger" size="small" plain @click="doDelete">删除</el-button>
@@ -117,13 +139,23 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, View, Clock, UserFilled, Document, Reading } from '@element-plus/icons-vue'
+import { Search, Plus, View, Clock, UserFilled, Document, Reading, Star, StarFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
 import api from '../api'
 
 const auth = useAuthStore()
 // 知识库维护权限：仅客服主管与系统管理员，客服与客户只读
 const canManage = computed(() => ['ADMIN', 'SUPERVISOR'].includes(auth.role))
+
+// 排序选项：发布时间（新/旧）、收藏量、浏览量
+const sortOptions = [
+  { value: 'newest', label: '最新发布' },
+  { value: 'oldest', label: '最早发布' },
+  { value: 'favorites', label: '收藏最多' },
+  { value: 'views', label: '浏览最多' }
+]
+const sort = ref('newest')
+const onlyFavorite = ref(false)
 
 const statusMap = { DRAFT: '草稿', REVIEW: '待审核', PUBLISHED: '已发布', OFFLINE: '已下架' }
 const statusTypeMap = { DRAFT: 'info', REVIEW: 'warning', PUBLISHED: 'success', OFFLINE: 'info' }
@@ -206,8 +238,9 @@ function renderMarkdown(md) {
 async function load() {
   loading.value = true
   try {
-    const params = { page: query.page, pageSize: query.pageSize }
+    const params = { page: query.page, pageSize: query.pageSize, sort: sort.value }
     if (keyword.value) params.keyword = keyword.value
+    if (onlyFavorite.value) params.onlyFavorite = true
     const data = await api.get('/knowledge', { params })
     rows.value = data.list || []
     total.value = data.total
@@ -217,6 +250,43 @@ async function load() {
 }
 
 function onPage(p) { query.page = p; load() }
+
+/* 切换排序：回到第一页重新加载 */
+function onSortChange() {
+  query.page = 1
+  load()
+}
+
+/* 切换「只看我的收藏」 */
+function toggleOnlyFavorite() {
+  onlyFavorite.value = !onlyFavorite.value
+  query.page = 1
+  load()
+}
+
+/* 收藏 / 取消收藏：列表与详情共用，同时同步两处的收藏数与状态 */
+async function toggleFav(a) {
+  if (!a) return
+  const on = !!a.favorited
+  try {
+    const data = on
+      ? await api.delete(`/knowledge/${a.id}/favorite`)
+      : await api.post(`/knowledge/${a.id}/favorite`)
+    const apply = obj => {
+      if (!obj) return
+      obj.favorited = data.favorited ? 1 : 0
+      obj.favoriteCount = data.favoriteCount
+    }
+    apply(a)
+    apply(rows.value.find(r => r.id === a.id))
+    apply(current.value)
+    ElMessage.success(on ? '已取消收藏' : '已收藏')
+    // 在「我的收藏」下取消收藏后，该卡片应从列表移除
+    if (on && onlyFavorite.value) load()
+  } catch (e) {
+    // 错误提示已由请求拦截器统一处理
+  }
+}
 
 async function loadCategories() {
   categories.value = await api.get('/knowledge/categories')
@@ -266,9 +336,15 @@ async function doSave() {
 }
 
 onMounted(() => {
+  const r = useRoute()
   // 支持从工单详情页「推荐知识库」带关键字跳转过来
-  const kw = useRoute().query.keyword
+  const kw = r.query.keyword
   if (kw) keyword.value = String(kw)
+  // 支持从个人中心「知识收藏」带 fav=1 跳转，直接进入我的收藏
+  if (r.query.fav === '1') {
+    onlyFavorite.value = true
+    query.page = 1
+  }
   load()
   loadCategories()
 })
@@ -277,15 +353,39 @@ onMounted(() => {
 <style scoped>
 .knowledge { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .toolbar { padding: 16px; display: flex; align-items: center; justify-content: space-between; }
-.filters { display: flex; gap: 12px; }
-.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.filters { display: flex; align-items: center; gap: 12px; }
+.sort-select { width: 132px; }
+/* 我的收藏筛选按钮：未选中为描边，选中为主色实底 */
+.fav-filter {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 32px; padding: 0 14px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px; background: #fff;
+  font-size: 13px; color: var(--text-sub); cursor: pointer;
+  transition: all 0.18s;
+}
+.fav-filter:hover { border-color: #fbbf24; color: #d97706; }
+.fav-filter.active { background: #fffbeb; border-color: #fbbf24; color: #b45309; font-weight: 600; }
+.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; min-height: 80px; }
 .kb-card { padding: 16px; cursor: pointer; transition: all 0.2s; }
 .kb-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
 .kb-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .kb-cat { font-size: 12px; color: var(--text-muted); }
+/* 卡片右上角收藏星标 */
+.fav-btn {
+  margin-left: auto; width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%; background: transparent;
+  color: #cbd5e1; cursor: pointer; transition: all 0.18s;
+}
+.fav-btn:hover { background: #fffbeb; color: #f59e0b; }
+.fav-btn.active { color: #f59e0b; }
 .kb-card-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
 .kb-card-summary { font-size: 13px; color: var(--text-sub); line-height: 1.5; min-height: 40px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.kb-card-foot { display: flex; justify-content: space-between; margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+.kb-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+.kb-metrics { display: inline-flex; align-items: center; gap: 12px; }
+.kb-metrics .m { display: inline-flex; align-items: center; gap: 3px; }
+.kb-metrics .m.on { color: #f59e0b; font-weight: 600; }
 .pager { display: flex; justify-content: flex-end; }
 
 /* ===== 详情弹窗 ===== */

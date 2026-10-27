@@ -113,6 +113,38 @@ public class AuthService {
         return menuService.menusFor(com.zyyqq.desk.security.AuthContext.require().role());
     }
 
+    /** 个人中心统计：按角色返回工单口径（我提交/我负责/全站）与我的知识收藏数 */
+    public Map<String, Object> profileStats() {
+        long uid = com.zyyqq.desk.security.AuthContext.require().id();
+        String role = com.zyyqq.desk.security.AuthContext.require().role();
+        Map<String, Object> m = new HashMap<>();
+        if ("CUSTOMER".equals(role)) {
+            m.put("scope", "MINE_CUSTOMER");
+            m.put("total", count("SELECT COUNT(*) FROM ticket WHERE customer_id = ?", uid));
+            m.put("resolved", count("SELECT COUNT(*) FROM ticket WHERE customer_id = ? AND status IN ('RESOLVED','CLOSED')", uid));
+            m.put("pending", count("SELECT COUNT(*) FROM ticket WHERE customer_id = ? AND status NOT IN ('RESOLVED','CLOSED')", uid));
+        } else if ("AGENT".equals(role)) {
+            m.put("scope", "MINE_AGENT");
+            m.put("total", count("SELECT COUNT(*) FROM ticket WHERE assignee_id = ?", uid));
+            m.put("resolved", count("SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status IN ('RESOLVED','CLOSED')", uid));
+            m.put("pending", count("SELECT COUNT(*) FROM ticket WHERE assignee_id = ? AND status NOT IN ('RESOLVED','CLOSED')", uid));
+        } else {
+            // 主管与管理员看全站口径
+            m.put("scope", "ALL");
+            m.put("total", count("SELECT COUNT(*) FROM ticket"));
+            m.put("resolved", count("SELECT COUNT(*) FROM ticket WHERE status IN ('RESOLVED','CLOSED')"));
+            m.put("pending", count("SELECT COUNT(*) FROM ticket WHERE status NOT IN ('RESOLVED','CLOSED')"));
+        }
+        m.put("favoriteCount", count("SELECT COUNT(*) FROM knowledge_favorite WHERE user_id = ?", uid));
+        return m;
+    }
+
+    /** 单值计数查询 */
+    private long count(String sql, Object... args) {
+        Long v = jdbc.queryForObject(sql, Long.class, args);
+        return v == null ? 0 : v;
+    }
+
     /** 更新个人资料（昵称/邮箱/手机号） */
     public Map<String, Object> updateProfile(String displayName, String email, String phone) {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();
@@ -147,6 +179,9 @@ public class AuthService {
         m.put("department", u.getDepartment());
         m.put("avatarColor", u.getAvatarColor());
         m.put("avatarUrl", u.getAvatarUrl());
+        m.put("createdAt", u.getCreatedAt());
+        m.put("lastLoginAt", u.getLastLoginAt());
+        m.put("status", u.getStatus());
         return m;
     }
 

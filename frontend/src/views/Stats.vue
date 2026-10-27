@@ -52,6 +52,38 @@
         <el-table-column prop="avg_resolve_hours" label="平均解决(时)" width="110" align="center" sortable />
       </el-table>
     </div>
+    <!-- 知识库表现 -->
+    <div class="panel-card kb-panel">
+      <div class="panel-head">
+        <span class="panel-title">知识库表现</span>
+        <span class="panel-sub">收藏量与浏览量排行榜（Top 10）</span>
+      </div>
+      <div class="kb-kpi">
+        <div class="kb-kpi-item" v-for="k in kbKpi" :key="k.label">
+          <div class="kb-kpi-value" :style="{ color: k.color }">{{ k.value }}</div>
+          <div class="kb-kpi-label">{{ k.label }}</div>
+        </div>
+      </div>
+      <el-table :data="kbTop" size="small" stripe>
+        <el-table-column type="index" label="#" width="50" align="center" />
+        <el-table-column prop="title" label="文章标题" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="categoryName" label="分类" width="130">
+          <template #default="{ row }">{{ row.categoryName || '未分类' }}</template>
+        </el-table-column>
+        <el-table-column prop="viewCount" label="浏览量" width="110" align="center" sortable />
+        <el-table-column prop="favoriteCount" label="收藏量" width="110" align="center" sortable>
+          <template #default="{ row }">
+            <span :style="{ color: row.favoriteCount > 0 ? '#f59e0b' : '#94a3b8', fontWeight: 600 }">
+              {{ row.favoriteCount }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="publishedAt" label="发布时间" width="160" align="center" sortable>
+          <template #default="{ row }">{{ fmtDate(row.publishedAt || row.createdAt) }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!kbTop.length" description="暂无知识文章" :image-size="70" />
+    </div>
   </div>
 </template>
 
@@ -72,6 +104,11 @@ const priorityName = { URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' 
 
 const kpi = ref([])
 const team = ref([])
+const kbKpi = ref([])
+const kbTop = ref([])
+
+/* 时间格式化：只保留到分钟 */
+function fmtDate(t) { return t ? String(t).replace('T', ' ').substring(0, 16) : '—' }
 
 async function load() {
   overview.value = await api.get('/stats/overview')
@@ -85,8 +122,21 @@ async function load() {
     { label: '客户数', value: d.customerCount, color: '#06b6d4' }
   ]
   team.value = await api.get('/stats/team-performance')
+  await loadKnowledge()
   await nextTick()
   renderCharts()
+}
+
+/* 加载知识库表现数据（浏览/收藏汇总 + Top 文章） */
+async function loadKnowledge() {
+  const kb = await api.get('/stats/knowledge', { params: { top: 10 } })
+  kbKpi.value = [
+    { label: '知识文章', value: kb.total, color: '#6366f1' },
+    { label: '总浏览量', value: kb.totalViews, color: '#3b82f6' },
+    { label: '总收藏量', value: kb.totalFavorites, color: '#f59e0b' },
+    { label: '篇均收藏', value: kb.avgFavorites, color: '#22c55e' }
+  ]
+  kbTop.value = kb.top || []
 }
 
 function renderCharts() {
@@ -153,7 +203,17 @@ onBeforeUnmount(() => {
 .chart-panel { padding: 16px; }
 .team-panel { padding: 16px; }
 .muted { color: #c0c4cc; }
-.panel-head { margin-bottom: 12px; }
+.panel-head { margin-bottom: 12px; display: flex; align-items: baseline; gap: 10px; }
 .panel-title { font-size: 15px; font-weight: 600; }
+.panel-sub { font-size: 12px; color: var(--text-muted); }
 .chart { height: 300px; }
+/* 知识库表现：四宫格 KPI + 排行榜表格 */
+.kb-panel { padding: 16px; }
+.kb-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.kb-kpi-item {
+  background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px;
+  padding: 14px; text-align: center;
+}
+.kb-kpi-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.kb-kpi-label { font-size: 12px; color: var(--text-sub); margin-top: 4px; }
 </style>

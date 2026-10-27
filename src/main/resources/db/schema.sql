@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS knowledge_article (
     KEY idx_article_published (published_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '知识文章';
 
+CREATE TABLE IF NOT EXISTS knowledge_favorite (
+    id         BIGINT   NOT NULL AUTO_INCREMENT,
+    article_id BIGINT   NOT NULL COMMENT '文章 ID',
+    user_id    BIGINT   NOT NULL COMMENT '收藏人',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_fav_article_user (article_id, user_id),
+    KEY idx_fav_user (user_id),
+    KEY idx_fav_article (article_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '知识文章收藏';
+
 CREATE TABLE IF NOT EXISTS notification (
     id           BIGINT       NOT NULL AUTO_INCREMENT,
     recipient_id BIGINT       NOT NULL,

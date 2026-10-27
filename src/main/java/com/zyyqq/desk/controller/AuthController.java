@@ -52,6 +52,12 @@ public class AuthController {
         return ApiResponse.ok(authService.profile());
     }
 
+    /** 个人中心统计（工单数、已解决、待处理、知识收藏数） */
+    @GetMapping("/profile/stats")
+    public ApiResponse<Map<String, Object>> profileStats() {
+        return ApiResponse.ok(authService.profileStats());
+    }
+
     /** 更新个人资料 */
     @PutMapping("/profile")
     public ApiResponse<Map<String, Object>> updateProfile(@RequestBody Map<String, String> body) {
