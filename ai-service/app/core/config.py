@@ -31,6 +31,11 @@ class Settings:
     # ===== 问答策略 =====
     knowledge_top_k: int = int(os.getenv("KNOWLEDGE_TOP_K", "5"))
     history_window: int = int(os.getenv("HISTORY_WINDOW", "8"))
+    # 向量检索的余弦相似度阈值：低于该值视为「知识库没有可靠依据」
+    # 配合 vector.py 的核心词校验，可压到 0.10：主题不对口的文章已被提前排除，不会误引用
+    retrieval_min_score: float = float(os.getenv("RETRIEVAL_MIN_SCORE", "0.10"))
+    # 单篇知识正文拼进上下文的长度上限
+    knowledge_context_chars: int = int(os.getenv("KNOWLEDGE_CONTEXT_CHARS", "700"))
 
     # ===== Redis（会话存储；不可用时自动降级为进程内存）=====
     redis_host: str = os.getenv("REDIS_HOST", "192.168.100.128")

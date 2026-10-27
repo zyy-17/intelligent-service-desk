@@ -1,5 +1,6 @@
-"""检索层：知识匹配、上下文构建与降级回答。"""
+"""检索层：向量检索、上下文构建、引用整理与降级回答。"""
 from .fallback import fallback_answer
-from .search import build_context, search_knowledge
+from .search import build_context, search_knowledge, to_references
+from .vector import vector_search
 
-__all__ = ["search_knowledge", "build_context", "fallback_answer"]
+__all__ = ["search_knowledge", "build_context", "to_references", "fallback_answer", "vector_search"]

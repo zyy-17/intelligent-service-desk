@@ -1,5 +1,5 @@
 """数据模型层：按业务场景拆分的 Pydantic 模型，统一从此处导出。"""
-from .chat import ChatRequest, ChatResponse, KnowledgeBrief, TicketBrief, UserProfile
+from .chat import ChatRequest, ChatResponse, KnowledgeBrief, KnowledgeReference, TicketBrief, UserProfile
 from .common import ErrorDetail, KnowledgeItem
 from .session import ChatMessage, SessionCreateRequest, SessionDetail, SessionSummary
 from .ticket import (
@@ -25,6 +25,7 @@ __all__ = [
     "UserProfile",
     "TicketBrief",
     "KnowledgeBrief",
+    "KnowledgeReference",
     "SummaryRequest",
     "SummaryResponse",
     "CategoryOption",

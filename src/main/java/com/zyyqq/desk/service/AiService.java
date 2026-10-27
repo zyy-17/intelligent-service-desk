@@ -134,6 +134,9 @@ public class AiService {
         boolean fallback = root.path("fallback").asBoolean(false);
         String model = root.path("model").asText(null);
         String respSessionId = root.path("session_id").asText(null);
+        // 引用以 AI 服务的向量检索结果为准，兼容旧版（无 references 时用本地命中）
+        List<Map<String, Object>> references = parseReferences(root);
+        boolean grounded = root.has("grounded") ? root.path("grounded").asBoolean() : !references.isEmpty();
         Map<String, Object> result = new HashMap<>();
         result.put("answer", answer.trim());
         result.put("source", source == null || source.isBlank() ? "模型生成" : source);
@@ -144,8 +147,28 @@ public class AiService {
         if (respSessionId != null && !respSessionId.isBlank()) {
             result.put("session_id", respSessionId);
         }
-        result.put("references", brief(hits));
+        result.put("references", references.isEmpty() ? brief(hits) : references);
+        result.put("grounded", grounded);
         return result;
+    }
+
+    /** 解析 AI 服务返回的引用列表（向量检索命中的知识文章与相似度） */
+    private List<Map<String, Object>> parseReferences(JsonNode node) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        JsonNode arr = node.path("references");
+        if (!arr.isArray()) {
+            return list;
+        }
+        for (JsonNode item : arr) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", item.path("id").asLong());
+            m.put("title", item.path("title").asText());
+            m.put("categoryName", item.path("category_name").asText(null));
+            m.put("summary", item.path("summary").asText(null));
+            m.put("score", item.path("score").asDouble(0));
+            list.add(m);
+        }
+        return list;
     }
 
     /** 生成工单处置建议步骤：查工单与相关知识后转发给 AI 服务，失败时用知识文章兜底 */
@@ -361,7 +384,7 @@ public class AiService {
 
         if (question == null || question.isBlank()) {
             callback.onDelta("请输入您的问题");
-            callback.onDone("无", true, null, null, (int) (System.currentTimeMillis() - start));
+            callback.onDone("无", true, null, null, (int) (System.currentTimeMillis() - start), List.of(), false);
             return;
         }
 
@@ -375,9 +398,9 @@ public class AiService {
         if (aiService.getBaseUrl() == null || aiService.getBaseUrl().isBlank()) {
             // 无 AI 服务，直接本地降级（一次性返回）
             String answer = buildFallbackAnswer(question, hits);
-            String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
+            String source = hits.isEmpty() ? "未找到可靠知识依据" : hits.get(0).getTitle();
             callback.onDelta(answer);
-            callback.onDone(source, true, null, null, (int) (System.currentTimeMillis() - start));
+            callback.onDone(source, true, null, null, (int) (System.currentTimeMillis() - start), brief(hits), !hits.isEmpty());
             saveLog(requestId, "QA", "FALLBACK", (int) (System.currentTimeMillis() - start), question,
                     answer.length(), "knowledge-base", source, null);
             log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 本地降级 命中={}",
@@ -412,6 +435,8 @@ public class AiService {
         String[] modelRef = {null};
         String[] sidRef = {null};
         Integer[] durationRef = {null};
+        List<Map<String, Object>> refsRef = new ArrayList<>();
+        boolean[] groundedRef = {false};
 
         try {
             HttpResponse<java.io.InputStream> resp = httpClient.send(req,
@@ -444,34 +469,46 @@ public class AiService {
                         modelRef[0] = node.path("model").asText(null);
                         sidRef[0] = node.path("session_id").asText(null);
                         durationRef[0] = node.path("duration_ms").asInt(0);
+                        // 引用与可信判定随 done 事件下发，供前端展示「回答依据」
+                        List<Map<String, Object>> refs = parseReferences(node);
+                        refsRef.clear();
+                        refsRef.addAll(refs);
+                        groundedRef[0] = node.has("grounded")
+                                ? node.path("grounded").asBoolean() : !refs.isEmpty();
                     }
                 }
             }
         } catch (Exception e) {
             // 流式失败，降级本地
             String answer = buildFallbackAnswer(question, hits);
-            String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
+            String source = hits.isEmpty() ? "未找到可靠知识依据" : hits.get(0).getTitle();
             answerBuf.setLength(0);
             answerBuf.append(answer);
             sourceRef[0] = source;
             fallbackRef[0] = true;
+            refsRef.clear();
+            refsRef.addAll(brief(hits));
+            groundedRef[0] = !hits.isEmpty();
             callback.onDelta(answer);
             log.warn("流式调用失败，降级本地：{}", e.getMessage());
         }
 
         long duration = System.currentTimeMillis() - start;
-        callback.onDone(sourceRef[0], fallbackRef[0], modelRef[0], sidRef[0], (int) duration);
+        callback.onDone(sourceRef[0], fallbackRef[0], modelRef[0], sidRef[0], (int) duration,
+                refsRef, groundedRef[0]);
         saveLog(requestId, "QA", fallbackRef[0] ? "FALLBACK" : "SUCCESS", (int) duration, question,
                 answerBuf.length(), fallbackRef[0] ? "knowledge-base" : modelRef[0], sourceRef[0], null);
         log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 来源={} 耗时={}ms 回答长度={}",
                 requestId, userId, truncate(question, 100), sourceRef[0], duration, answerBuf.length());
     }
 
-    /** 流式回调接口：onDelta 逐段返回文本，onDone 返回完成元信息 */
+    /** 流式回调接口：onDelta 逐段返回文本，onDone 返回完成元信息（引用与可信判定） */
     @FunctionalInterface
     public interface StreamCallback {
         void onDelta(String delta) throws Exception;
-        default void onDone(String source, boolean fallback, String model, String sessionId, int durationMs) throws Exception {
+
+        default void onDone(String source, boolean fallback, String model, String sessionId, int durationMs,
+                            java.util.List<Map<String, Object>> references, boolean grounded) throws Exception {
         }
     }
 

@@ -54,13 +54,17 @@ public class AiController {
                     }
 
                     @Override
-                    public void onDone(String source, boolean fallback, String model, String sessionId, int durationMs) throws Exception {
+                    public void onDone(String source, boolean fallback, String model, String sessionId, int durationMs,
+                                       java.util.List<Map<String, Object>> references, boolean grounded) throws Exception {
                         Map<String, Object> meta = new java.util.HashMap<>();
                         meta.put("source", source);
                         meta.put("fallback", fallback);
                         meta.put("model", model);
                         meta.put("session_id", sessionId);
                         meta.put("duration_ms", durationMs);
+                        // 回答依据的知识文章与可信判定：前端据此展示引用卡片或无依据提示
+                        meta.put("references", references);
+                        meta.put("grounded", grounded);
                         emitter.send(SseEmitter.event().name("done").data(meta));
                         emitter.complete();
                     }

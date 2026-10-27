@@ -15,8 +15,8 @@ import java.util.Map;
 @Service
 public class AiContextService {
 
-    /** 知识库目录最多下发的文章数（避免上下文过长） */
-    private static final int CATALOG_LIMIT = 60;
+    /** 知识库文档最多下发的篇数（向量检索语料） */
+    private static final int DOCS_LIMIT = 300;
     /** 近期工单最多下发的条数 */
     private static final int TICKET_LIMIT = 5;
     /** 工单解决方案截断长度 */
@@ -105,28 +105,31 @@ public class AiContextService {
         }
     }
 
-    /** 读取知识库全量目录（仅标题/摘要/关键词，正文由检索命中后再下发） */
-    public List<Map<String, Object>> knowledgeCatalog() {
+    /** 读取已发布知识全量文档（含正文），供 AI 服务做向量检索 */
+    public List<Map<String, Object>> knowledgeDocs() {
         String sql = """
-                SELECT a.id, a.title, a.summary, a.keywords, c.name AS category_name
+                SELECT a.id, a.title, a.summary, a.body, a.keywords,
+                       a.view_count AS view_count, c.name AS category_name
                 FROM knowledge_article a
                 LEFT JOIN knowledge_category c ON c.id = a.category_id
                 WHERE a.status = 'PUBLISHED'
                 ORDER BY a.view_count DESC, a.published_at DESC
                 LIMIT %d
-                """.formatted(CATALOG_LIMIT);
+                """.formatted(DOCS_LIMIT);
         try {
             return jdbc.query(sql, (rs, i) -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", rs.getLong("id"));
                 m.put("title", rs.getString("title"));
                 m.put("summary", rs.getString("summary"));
+                m.put("body", rs.getString("body"));
                 m.put("keywords", rs.getString("keywords"));
+                m.put("view_count", rs.getInt("view_count"));
                 m.put("category_name", rs.getString("category_name"));
                 return m;
             });
         } catch (Exception e) {
-            log.warn("读取知识库目录失败：{}", e.getMessage());
+            log.warn("读取知识库文档失败：{}", e.getMessage());
             return List.of();
         }
     }
@@ -185,7 +188,7 @@ public class AiContextService {
         }
     }
 
-    /** 组装完整上下文（用户画像 + 近期工单 + 知识库目录） */
+    /** 组装完整上下文（用户画像 + 近期工单 + 已发布知识全量文档） */
     public void applyContext(Map<String, Object> payload, Object userId, String role) {
         if (!(userId instanceof Number n)) {
             return;
@@ -193,6 +196,7 @@ public class AiContextService {
         long uid = n.longValue();
         payload.put("user_profile", profile(uid, role));
         payload.put("tickets", recentTickets(uid, role));
-        payload.put("knowledge_catalog", knowledgeCatalog());
+        // 全量文档随请求下发，由 AI 服务在本地做向量检索（余弦相似度）
+        payload.put("knowledge_docs", knowledgeDocs());
     }
 }

@@ -173,6 +173,8 @@ onMounted(() => {
   if (kw) query.keyword = String(kw)
   load()
   loadCategories()
+  // 支持 AI 助手「没有可靠依据」时一键跳转过来直接打开新建工单弹窗
+  if (route.query.create) openCreate()
 })
 </script>
 

@@ -36,6 +36,36 @@
           <div class="bubble-wrap">
             <div class="bubble markdown-body" :class="{ 'is-user': m.role === 'user' }"
                  v-html="m.role === 'assistant' ? renderMd(m.content) : escapeHtml(m.content)"></div>
+
+            <!-- 回答依据：命中的知识库文章，可点击查看详情 -->
+            <div v-if="m.references && m.references.length" class="refs">
+              <div class="refs-head">
+                <el-icon><Link /></el-icon>
+                <span>回答依据 · 引用 {{ m.references.length }} 篇知识库文章</span>
+              </div>
+              <div v-for="r in m.references" :key="r.id" class="ref-item" @click="openRef(r)">
+                <span class="ref-rank">{{ r.rank }}</span>
+                <div class="ref-main">
+                  <div class="ref-title">{{ r.title }}</div>
+                  <div class="ref-sub">
+                    <span class="ref-cat">{{ r.category_name || '未分类' }}</span>
+                    <span v-if="r.score != null" class="ref-score">相关度 {{ Math.round(r.score * 100) }}%</span>
+                  </div>
+                </div>
+                <el-icon class="ref-go"><ArrowRight /></el-icon>
+              </div>
+            </div>
+
+            <!-- 无可靠依据：明确告知并引导建单 / 转人工 -->
+            <div v-else-if="m.notGrounded" class="noground">
+              <div class="ng-head"><el-icon><WarningFilled /></el-icon><span>知识库暂无可靠依据</span></div>
+              <p class="ng-text">没有检索到与该问题足够匹配的已发布知识，以上回答可能不够准确，建议由人工客服进一步确认。</p>
+              <div class="ng-actions">
+                <el-button size="small" type="primary" @click="goCreateTicket">创建工单</el-button>
+                <el-button size="small" plain @click="goHuman">联系人工客服</el-button>
+              </div>
+            </div>
+
             <div v-if="m.meta" class="msg-meta">{{ m.meta }}</div>
           </div>
           <div v-if="m.role === 'user'" class="user-avatar" :style="{ background: myColor }">{{ meName.charAt(0) }}</div>
@@ -57,13 +87,44 @@
         </div>
       </div>
     </div>
+
+    <!-- 回答依据详情弹窗：点击引用卡片打开，正文按 markdown 渲染 -->
+    <el-dialog v-model="refVisible" class="ref-detail-dialog" width="min(860px, 84vw)" top="8vh">
+      <template #header>
+        <div class="rd-head">
+          <span>知识库</span>
+          <span class="rd-sep">/</span>
+          <span class="rd-cur">回答依据详情</span>
+        </div>
+      </template>
+      <div v-loading="refLoading" class="rd-body">
+        <template v-if="refDetail">
+          <h2 class="rd-title">{{ refDetail.title }}</h2>
+          <div class="rd-tags">
+            <span class="rd-chip">{{ refDetail.category_name || refDetail.categoryName || '未分类' }}</span>
+            <span v-if="refDetail.score != null" class="rd-chip score">
+              相关度 {{ Math.round(refDetail.score * 100) }}%
+            </span>
+            <span v-if="refDetail.viewCount" class="rd-chip plain">{{ refDetail.viewCount }} 次浏览</span>
+          </div>
+          <div v-if="refDetail.summary" class="rd-summary">{{ refDetail.summary }}</div>
+          <div class="markdown-body rd-content" v-html="renderMd(refDetail.body || '暂无正文内容')"></div>
+        </template>
+      </div>
+      <template #footer>
+        <div class="rd-foot">
+          <el-button size="small" @click="goKnowledge">去知识库查看</el-button>
+          <el-button size="small" type="primary" @click="refVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Promotion, Plus, Delete, ChatDotRound } from '@element-plus/icons-vue'
+import { Promotion, Plus, Delete, ChatDotRound, Link, ArrowRight, WarningFilled } from '@element-plus/icons-vue'
 import botAvatar from '../assets/ai-bot-avatar.png'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../store/auth'
@@ -91,6 +152,46 @@ const hasStreaming = ref(false)
 const chatBody = ref(null)
 
 const quickQuestions = ['如何重置密码', '如何申请退款', '如何导出报表', '如何联系人工客服']
+
+// 回答依据详情弹窗
+const refVisible = ref(false)
+const refLoading = ref(false)
+const refDetail = ref(null)
+
+// 打开引用文章的详情：先用卡片信息占位，再拉正文
+async function openRef(r) {
+  refVisible.value = true
+  refLoading.value = true
+  refDetail.value = { ...r }
+  try {
+    const data = await api.get(`/knowledge/${r.id}`, { params: { incrView: true } })
+    refDetail.value = { ...r, ...data }
+  } catch (e) {
+    // 拉取失败时保留卡片里的标题与摘要，不阻断阅读
+  } finally {
+    refLoading.value = false
+  }
+}
+
+// 跳转知识库并定位到该分类，便于继续查找相关文章
+function goKnowledge() {
+  refVisible.value = false
+  router.push('/knowledge')
+}
+
+// 无可靠依据时：带着问题直接去新建工单
+function goCreateTicket() {
+  router.push({ path: '/tickets', query: { create: '1' } })
+}
+
+// 无可靠依据时：展示人工客服联系方式
+function goHuman() {
+  ElMessageBox.alert(
+    '客服热线 400-800-8888（7×24 小时值守），也可发邮件至 support@example.com，1 个工作日内回复。\n如需留痕跟进，建议同时创建一张工单。',
+    '联系人工客服',
+    { confirmButtonText: '我知道了', type: 'info' }
+  )
+}
 
 function renderMd(text) {
   return renderMarkdown(text)
@@ -242,6 +343,12 @@ async function send(q) {
       (doneMeta && doneMeta.duration_ms ? ` · 服务端 ${(doneMeta.duration_ms / 1000).toFixed(1)}s` : '')
     streamingText.value = ''
 
+    // 回答依据：命中知识文章则展示引用卡片；没命中则提示无可靠依据
+    if (doneMeta) {
+      assistantMsg.references = Array.isArray(doneMeta.references) ? doneMeta.references : []
+      assistantMsg.notGrounded = doneMeta.grounded === false
+    }
+
     if (doneMeta && doneMeta.session_id) {
       currentSessionId.value = doneMeta.session_id
     }
@@ -261,7 +368,12 @@ async function fallbackSend(q) {
     const payload = { question: q }
     if (currentSessionId.value) payload.session_id = currentSessionId.value
     const data = await api.post('/ai/chat', payload)
-    messages.value.push({ role: 'assistant', content: data.answer || '未获得有效回答' })
+    messages.value.push({
+      role: 'assistant',
+      content: data.answer || '未获得有效回答',
+      references: Array.isArray(data.references) ? data.references : [],
+      notGrounded: data.grounded === false
+    })
     if (data.session_id) currentSessionId.value = data.session_id
     loadSessions()
   } catch (e) {
@@ -363,6 +475,46 @@ onMounted(() => {
 
 .msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; padding-left: 4px; }
 
+/* 回答依据：知识库引用卡片 */
+.refs { margin-top: 8px; background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.refs-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+.ref-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+.ref-item:hover { background: #eef2ff; }
+.ref-rank {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%;
+  background: #e0e7ff; color: #4338ca; font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.ref-main { flex: 1; min-width: 0; }
+.ref-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-sub { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 11px; color: var(--text-muted); }
+.ref-cat { background: #eef2ff; color: var(--primary); padding: 0 6px; border-radius: 8px; }
+.ref-score { color: #047857; }
+.ref-go { color: #c0c4cc; flex-shrink: 0; }
+
+/* 无可靠依据提示 */
+.noground { margin-top: 8px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 12px; }
+.ng-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #b45309; }
+.ng-text { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: #92400e; }
+.ng-actions { display: flex; gap: 8px; }
+
+/* 引用详情弹窗内容 */
+.rd-head { font-size: 14px; font-weight: 600; }
+.rd-sep { margin: 0 6px; color: #c0c4cc; }
+.rd-cur { color: var(--primary); }
+.rd-body { min-height: 140px; }
+.rd-title { font-size: 20px; font-weight: 700; margin: 0 0 10px; line-height: 1.4; }
+.rd-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.rd-chip { font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #eef2ff; color: var(--primary); }
+.rd-chip.score { background: #ecfdf5; color: #047857; }
+.rd-chip.plain { background: #f3f4f6; color: var(--text-muted); }
+.rd-summary {
+  background: #f8fafc; border-left: 3px solid var(--primary); padding: 10px 12px;
+  border-radius: 6px; font-size: 13px; line-height: 1.7; color: #334155; margin-bottom: 14px;
+}
+.rd-content { font-size: 14px; line-height: 1.8; }
+.rd-foot { display: flex; justify-content: flex-end; gap: 8px; }
+
 .chat-input { padding: 14px 20px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .quick-qs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .quick-q { font-size: 12px; color: var(--primary); background: #eef2ff; padding: 4px 12px; border-radius: 14px; cursor: pointer; }
@@ -392,4 +544,12 @@ onMounted(() => {
 @media (max-width: 900px) {
   .session-panel { display: none; }
 }
+</style>
+
+<style>
+/* 引用详情弹窗：宽度自适应，正文区可滚动（弹窗内部类名不受 scoped 限制） */
+.ref-detail-dialog { padding: 0; border-radius: 14px; overflow: hidden; }
+.ref-detail-dialog .el-dialog__header { margin: 0; padding: 16px 22px 12px; border-bottom: 1px solid #eef2f7; }
+.ref-detail-dialog .el-dialog__body { padding: 16px 22px; max-height: 66vh; overflow-y: auto; }
+.ref-detail-dialog .el-dialog__footer { padding: 12px 22px 16px; border-top: 1px solid #eef2f7; }
 </style>

@@ -22,8 +22,12 @@ public class MenuService {
             menu("/chat", "智能问答", "ChatDotRound", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/stats", "数据统计", "DataAnalysis", "ADMIN", "SUPERVISOR"),
             menu("/system", "系统管理", "Setting", "ADMIN"),
-            menu("/profile", "个人中心", "UserFilled", "CUSTOMER")
+            // 个人中心对所有角色开放，且固定排在最后（menusFor 会再次保证顺序）
+            menu("/profile", "个人中心", "UserFilled", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER")
     );
+
+    /** 个人中心路径：各角色统一固定在菜单末尾 */
+    private static final String PROFILE_PATH = "/profile";
 
     /** 客户端菜单文案覆盖：把管理味词汇换成客户视角的措辞 */
     private static final Map<String, String> CUSTOMER_LABELS = Map.of(
@@ -31,9 +35,10 @@ public class MenuService {
             "/chat", "AI 智能助手"
     );
 
-    /** 根据角色返回可见菜单列表 */
+    /** 根据角色返回可见菜单列表，个人中心始终排在最后 */
     public List<Map<String, Object>> menusFor(String role) {
         List<Map<String, Object>> result = new ArrayList<>();
+        Map<String, Object> profile = null;
         for (Map<String, Object> m : ALL_MENUS) {
             @SuppressWarnings("unchecked")
             List<String> roles = (List<String>) m.get("roles");
@@ -46,8 +51,16 @@ public class MenuService {
                         ? CUSTOMER_LABELS.getOrDefault(path, (String) m.get("label"))
                         : m.get("label"));
                 item.put("icon", m.get("icon"));
-                result.add(item);
+                if (PROFILE_PATH.equals(path)) {
+                    profile = item;
+                } else {
+                    result.add(item);
+                }
             }
+        }
+        // 无论前面有多少菜单，个人中心都追加到末尾
+        if (profile != null) {
+            result.add(profile);
         }
         return result;
     }
