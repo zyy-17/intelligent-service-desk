@@ -55,6 +55,10 @@ public class KnowledgeService {
             LEFT JOIN knowledge_favorite mf ON mf.article_id = a.id AND mf.user_id = ?
             """;
 
+    /** 详情查询在公共片段上追加正文：列表不返回 body 以减小响应体，详情与编辑回填才需要 */
+    private static final String ARTICLE_DETAIL_SELECT =
+            ARTICLE_SELECT.replace("a.summary,", "a.summary, a.body,");
+
     /** 查询知识分类列表（带缓存） */
     public List<KnowledgeCategory> categories() {
         return redisSupport.cacheJson("knowledge_categories", List.class,
@@ -125,22 +129,24 @@ public class KnowledgeService {
         return copy;
     }
 
-    /** 文章详情（客户仅能看已发布，浏览数自增；返回收藏量与本人收藏状态） */
-    public Map<String, Object> detail(Long id) {
+    /** 文章详情（客户仅能看已发布；incrView 为 true 时浏览数 +1，编辑回填时不计数） */
+    public Map<String, Object> detail(Long id, boolean incrView) {
         Map<String, Object> a = findMap(id);
         AuthContext.UserInfo u = AuthContext.require();
         if (!"PUBLISHED".equals(a.get("status")) && "CUSTOMER".equals(u.role())) {
             throw BizException.forbidden("文章未发布");
         }
-        articleRepository.incrView(id);
-        // 自增后再返回，保证展示的浏览数与库内一致
-        a.put("viewCount", toLong(a.get("viewCount")) + 1);
+        if (incrView) {
+            articleRepository.incrView(id);
+            // 自增后再返回，保证展示的浏览数与库内一致
+            a.put("viewCount", toLong(a.get("viewCount")) + 1);
+        }
         return a;
     }
 
-    /** 读取单篇文章（含分类/作者/收藏量），不存在则抛 404 */
+    /** 读取单篇文章（含正文/分类/作者/收藏量），不存在则抛 404 */
     private Map<String, Object> findMap(Long id) {
-        List<Map<String, Object>> rows = jdbc.queryForList(ARTICLE_SELECT + " WHERE a.id = ?",
+        List<Map<String, Object>> rows = jdbc.queryForList(ARTICLE_DETAIL_SELECT + " WHERE a.id = ?",
                 AuthContext.require().id(), id);
         if (rows.isEmpty()) {
             throw BizException.notFound("文章不存在");

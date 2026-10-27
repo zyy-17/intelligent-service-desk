@@ -297,11 +297,13 @@ async function openDetail(a) {
   detailVisible.value = true
 }
 
-function openEdit(a) {
-  if (a) {
+/* 编辑：列表数据不含正文，需按 incrView=false 拉一次详情回填，避免保存时把正文清空 */
+async function openEdit(a) {
+  if (a?.id) {
+    const d = await api.get(`/knowledge/${a.id}`, { params: { incrView: false } })
     Object.assign(editForm, {
-      id: a.id, title: a.title, summary: a.summary, body: a.body,
-      categoryId: a.categoryId, keywords: a.keywords, status: a.status
+      id: d.id, title: d.title, summary: d.summary, body: d.body,
+      categoryId: d.categoryId, keywords: d.keywords, status: d.status
     })
   } else {
     Object.assign(editForm, { id: null, title: '', summary: '', body: '', categoryId: null, keywords: '', status: 'DRAFT' })
@@ -392,7 +394,8 @@ onMounted(() => {
 .kb-dlg-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
 .kb-crumb-sep { color: #cbd5e1; }
 .kb-crumb-cur { color: var(--text-main); font-weight: 600; }
-.kb-detail { height: 100%; overflow-y: auto; padding-right: 6px; }
+/* 正文容器：占满弹窗 body 剩余高度并在内部滚动，避免长正文被裁剪 */
+.kb-detail { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; }
 .kb-title { margin: 0 0 10px; font-size: 20px; font-weight: 700; line-height: 1.45; color: #1e2c5c; }
 .kb-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .kb-chip { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; }
@@ -472,6 +475,7 @@ onMounted(() => {
 .kb-detail-dialog .el-dialog__body {
   flex: 1; min-height: 0; overflow: hidden;
   padding: 16px 24px 0;
+  display: flex; flex-direction: column;
 }
 .kb-detail-dialog .el-dialog__footer {
   flex: none; padding: 12px 24px 16px;

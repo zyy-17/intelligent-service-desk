@@ -204,13 +204,15 @@ public class TicketService {
                         "LEFT JOIN ticket_category c ON c.id = t.category_id WHERE t.id = ?", id)
                 .stream().findFirst()
                 .orElseThrow(() -> BizException.notFound("工单不存在"));
-        // 消息：联表带发送人姓名/角色/头像，客户视角过滤内部备注
+        // 消息：联表带发送人姓名/角色/头像；客户与非处理人客服过滤内部备注
         List<Map<String, Object>> messages = jdbc.queryForList(
                 "SELECT m.*, u.display_name AS sender_name, u.role AS sender_role, " +
                         "u.avatar_color AS sender_avatar_color, u.avatar_url AS sender_avatar_url " +
                         "FROM ticket_message m JOIN sys_user u ON u.id = m.sender_id " +
                         "WHERE m.ticket_id = ? ORDER BY m.created_at ASC, m.id ASC", id);
-        if (isCustomer) {
+        boolean isAssignee = t.getAssigneeId() != null && t.getAssigneeId().equals(u.id());
+        // 内部备注仅本工单处理人与主管/管理员可见，客服在工单大厅查看他人工单时只返回公开消息
+        if (isCustomer || ("AGENT".equals(u.role()) && !isAssignee)) {
             messages = messages.stream()
                     .filter(m -> "PUBLIC".equals(col(m, "message_type")))
                     .toList();

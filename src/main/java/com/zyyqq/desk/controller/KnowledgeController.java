@@ -43,10 +43,11 @@ public class KnowledgeController {
         return ApiResponse.ok(knowledgeService.hot(limit));
     }
 
-    /** 文章详情 */
+    /** 文章详情（incrView=false 用于编辑回填，不计浏览数） */
     @GetMapping("/{id}")
-    public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {
-        return ApiResponse.ok(knowledgeService.detail(id));
+    public ApiResponse<Map<String, Object>> detail(@PathVariable Long id,
+                                                   @RequestParam(defaultValue = "true") boolean incrView) {
+        return ApiResponse.ok(knowledgeService.detail(id, incrView));
     }
 
     /** 收藏文章（任意身份均可） */
