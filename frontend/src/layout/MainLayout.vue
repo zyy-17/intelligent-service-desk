@@ -136,7 +136,15 @@ const auth = useAuthStore()
 // 菜单由后端按角色下发，前端直接渲染（无需维护角色映射）
 const menu = computed(() => auth.menus || [])
 
-const isActive = (path) => route.path.startsWith(path)
+// 高亮取「最长前缀匹配」的菜单项，避免 /tickets/hall 同时点亮 /tickets
+const activePath = computed(() => {
+  const paths = (auth.menus || []).map(m => m.path)
+  const hit = paths
+    .filter(p => route.path === p || route.path.startsWith(p + '/'))
+    .sort((a, b) => b.length - a.length)[0]
+  return hit || ''
+})
+const isActive = (path) => activePath.value === path
 
 const roleMap = { ADMIN: '系统管理员', SUPERVISOR: '客服主管', AGENT: '客服人员', CUSTOMER: '客户' }
 const roleLabel = computed(() => roleMap[auth.role] || auth.role)

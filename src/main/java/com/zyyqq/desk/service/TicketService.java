@@ -53,10 +53,14 @@ public class TicketService {
         int p = Math.max(page, 1);
         StringBuilder where = new StringBuilder(" WHERE 1=1 ");
         List<Object> args = new java.util.ArrayList<>();
-        // 资源级权限：客户只能看自己的工单，避免越权浏览全站数据
+        // 资源级权限：客户只能看自己的工单；客服在「工单管理」只看归自己负责的工单
+        // （全站/他人工单走「工单大厅」入口，见 hall 方法）
         AuthContext.UserInfo me = AuthContext.require();
         if ("CUSTOMER".equals(me.role())) {
             where.append(" AND t.customer_id = ? ");
+            args.add(me.id());
+        } else if ("AGENT".equals(me.role())) {
+            where.append(" AND t.assignee_id = ? ");
             args.add(me.id());
         }
         if (status != null && !status.isBlank()) {
@@ -79,6 +83,99 @@ public class TicketService {
                         "c.name AS category_name, c.color AS category_color" + base + where +
                         " ORDER BY t.created_at DESC LIMIT ? OFFSET ?", args.toArray());
         return PageResult.of(rows, total, p, size);
+    }
+
+    /**
+     * 工单大厅：客服查看全部不归自己负责的工单（含未分配、他人处理中），
+     * 未分配的待分配工单可申请认领；同时带出当前申请人便于展示"谁在申请中"
+     */
+    public PageResult<Map<String, Object>> hall(int page, int pageSize, String status, String keyword) {
+        int size = Math.min(Math.max(pageSize, 1), 100);
+        int p = Math.max(page, 1);
+        AuthContext.UserInfo me = AuthContext.require();
+        // 只排除自己已负责的工单（那些在「工单管理」里），其余全部可见
+        StringBuilder where = new StringBuilder(" WHERE (t.assignee_id IS NULL OR t.assignee_id <> ?) ");
+        List<Object> args = new java.util.ArrayList<>();
+        args.add(me.id());
+        if (status != null && !status.isBlank()) {
+            where.append(" AND t.status = ? ");
+            args.add(status);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            where.append(" AND (t.ticket_no LIKE ? OR t.title LIKE ?) ");
+            args.add("%" + keyword + "%");
+            args.add("%" + keyword + "%");
+        }
+        // 申请人取该工单最新一条 APPLY 历史（同一时间只允许一个待审核申请）
+        String base = " FROM ticket t " +
+                "LEFT JOIN sys_user cu ON cu.id = t.customer_id " +
+                "LEFT JOIN sys_user au ON au.id = t.assignee_id " +
+                "LEFT JOIN ticket_category c ON c.id = t.category_id " +
+                "LEFT JOIN (SELECT h.ticket_id, h.operator_id, h.created_at, " +
+                "           ROW_NUMBER() OVER (PARTITION BY h.ticket_id ORDER BY h.id DESC) rn " +
+                "           FROM ticket_history h WHERE h.action = 'APPLY') ap1 " +
+                "       ON ap1.ticket_id = t.id AND ap1.rn = 1 " +
+                "LEFT JOIN sys_user ap ON ap.id = ap1.operator_id ";
+        Long total = jdbc.queryForObject("SELECT COUNT(*)" + base + where, Long.class, args.toArray());
+        args.add(size);
+        args.add((p - 1) * size);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT t.*, cu.display_name AS customer_name, au.display_name AS assignee_name, " +
+                        "c.name AS category_name, c.color AS category_color, " +
+                        "ap.id AS applicant_id, ap.display_name AS applicant_name, ap1.created_at AS apply_at" +
+                        base + where + " ORDER BY t.created_at DESC LIMIT ? OFFSET ?", args.toArray());
+        // 申请资格：未分配且仍处于待分配状态（他人申请中的工单不可重复申请）
+        for (Map<String, Object> row : rows) {
+            row.put("canApply", col(row, "assignee_id") == null && "PENDING".equals(col(row, "status")));
+        }
+        return PageResult.of(rows, total, p, size);
+    }
+
+    /** 客服申请负责处理未分配工单：状态转为待审核，并通知主管与管理员审核 */
+    @Transactional
+    public void apply(Long ticketId) {
+        AuthContext.UserInfo u = AuthContext.require();
+        Ticket t = requireTicket(ticketId);
+        if (t.getAssigneeId() != null) {
+            throw new BizException("该工单已有处理人，无法申请");
+        }
+        if (!"PENDING".equals(t.getStatus())) {
+            throw new BizException("该工单当前状态不可申请");
+        }
+        jdbc.update("UPDATE ticket SET status = 'PENDING_REVIEW' WHERE id = ?", ticketId);
+        historyRepository.save(history(ticketId, u.id(), "APPLY", "PENDING", "PENDING_REVIEW", "申请负责处理该工单"));
+        for (Long uid : reviewerIds()) {
+            addNotification(uid, "工单申请待审核", "客服「" + u.displayName() + "」申请处理工单，请审核", ticketId);
+        }
+    }
+
+    /** 主管/管理员审核接单申请：通过则工单归申请人，驳回则退回待分配 */
+    @Transactional
+    public void review(Long ticketId, boolean approve, String remark) {
+        AuthContext.UserInfo u = AuthContext.require();
+        Ticket t = requireTicket(ticketId);
+        if (!"PENDING_REVIEW".equals(t.getStatus())) {
+            throw new BizException("该工单不在待审核状态");
+        }
+        Map<String, Object> ap = jdbc.queryForList(
+                "SELECT h.operator_id FROM ticket_history h WHERE h.ticket_id = ? AND h.action = 'APPLY' " +
+                        "ORDER BY h.id DESC LIMIT 1", ticketId)
+                .stream().findFirst().orElseThrow(() -> new BizException("未找到该工单的申请记录"));
+        Object applicantObj = col(ap, "operator_id");
+        if (applicantObj == null) {
+            throw new BizException("未找到该工单的申请人");
+        }
+        Long applicantId = ((Number) applicantObj).longValue();
+        String note = (remark == null || remark.isBlank()) ? "" : "：" + remark;
+        if (approve) {
+            ticketRepository.updateStatusAndAssignee(ticketId, "ASSIGNED", applicantId);
+            historyRepository.save(history(ticketId, u.id(), "REVIEW", "PENDING_REVIEW", "ASSIGNED", "审核通过，工单分配给申请人" + note));
+            addNotification(applicantId, "工单申请已通过", "您申请的工单已分配给您，请及时处理", ticketId);
+        } else {
+            jdbc.update("UPDATE ticket SET status = 'PENDING' WHERE id = ?", ticketId);
+            historyRepository.save(history(ticketId, u.id(), "REVIEW", "PENDING_REVIEW", "PENDING", "审核驳回" + note));
+            addNotification(applicantId, "工单申请被驳回", "您的工单申请未通过" + note, ticketId);
+        }
     }
 
     /**
@@ -128,6 +225,15 @@ public class TicketService {
         data.put("ticket", ticket);
         data.put("messages", messages);
         data.put("histories", histories);
+        // 待审核工单：带出最近一次申请，供主管/管理员在详情页审核时展示申请人
+        List<Map<String, Object>> applies = jdbc.queryForList(
+                "SELECT h.operator_id AS applicant_id, u.display_name AS applicant_name, " +
+                        "h.created_at AS apply_at, h.remark AS apply_remark " +
+                        "FROM ticket_history h LEFT JOIN sys_user u ON u.id = h.operator_id " +
+                        "WHERE h.ticket_id = ? AND h.action = 'APPLY' ORDER BY h.id DESC LIMIT 1", id);
+        if (!applies.isEmpty()) {
+            data.put("apply", applies.get(0));
+        }
         // 详情页左侧客户卡：历史工单数用于判定活跃度标签
         data.put("customerTicketCount", customerTicketCount(t.getCustomerId()));
         // 详情页右栏：按工单标题与分类匹配的推荐知识（带匹配度百分比）
@@ -405,6 +511,11 @@ public class TicketService {
     /** 查询可分配的客服列表 */
     public List<Map<String, Object>> agents() {
         return jdbc.queryForList("SELECT id, display_name AS name, department, avatar_color FROM sys_user WHERE role='AGENT' AND status=1 ORDER BY id");
+    }
+
+    /** 查询参与接单申请审核的人员（主管与管理员） */
+    private List<Long> reviewerIds() {
+        return jdbc.queryForList("SELECT id FROM sys_user WHERE role IN ('ADMIN','SUPERVISOR') AND status = 1", Long.class);
     }
 
     /** 查询启用的工单分类列表 */

@@ -15,6 +15,8 @@ const routes = [
     children: [
       { path: 'dashboard', name: 'dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '工作台' } },
       { path: 'tickets', name: 'tickets', component: () => import('../views/Tickets.vue'), meta: { title: '工单管理' } },
+      // 必须排在 tickets/:id 之前，否则 hall 会被当成工单 id 匹配
+      { path: 'tickets/hall', name: 'ticket-hall', component: () => import('../views/TicketsHall.vue'), meta: { title: '工单大厅' } },
       { path: 'tickets/:id', name: 'ticket-detail', component: () => import('../views/TicketDetail.vue'), meta: { title: '工单详情' } },
       { path: 'customers', name: 'customers', component: () => import('../views/Customers.vue'), meta: { title: '客户管理' } },
       { path: 'knowledge', name: 'knowledge', component: () => import('../views/Knowledge.vue'), meta: { title: '知识库' } },

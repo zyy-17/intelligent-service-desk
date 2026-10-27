@@ -38,7 +38,7 @@ public class AiContextService {
                     SELECT u.id, u.username, u.display_name, u.role, u.company, u.department,
                            u.email, u.phone, DATE_FORMAT(u.created_at, '%%Y-%%m-%%d') AS joined_at,
                            (SELECT COUNT(*) FROM ticket t WHERE %s) AS ticket_total,
-                           (SELECT COUNT(*) FROM ticket t WHERE %s AND t.status IN ('PENDING','ASSIGNED','PROCESSING','WAITING')) AS ticket_processing,
+                           (SELECT COUNT(*) FROM ticket t WHERE %s AND t.status IN ('PENDING','PENDING_REVIEW','ASSIGNED','PROCESSING','WAITING')) AS ticket_processing,
                            (SELECT COUNT(*) FROM ticket t WHERE %s AND t.status IN ('RESOLVED','CLOSED')) AS ticket_resolved
                     FROM sys_user u WHERE u.id = ?
                     """.formatted(scope, scope, scope),

@@ -15,10 +15,27 @@
         <span class="badge" :class="'pr-' + priority">{{ priorityLabel }}</span>
       </div>
       <div class="tb-right" v-if="isStaff && ticket">
+        <template v-if="canReview">
+          <el-button size="small" type="success" @click="doReview(true)">通过申请</el-button>
+          <el-button size="small" type="danger" plain @click="doReview(false)">驳回</el-button>
+        </template>
         <el-button size="small" :disabled="!canAssign" @click="assignVisible = true">指派 / 转接</el-button>
         <el-button size="small" type="success" :disabled="!canResolve" @click="openResolve">
           {{ status === 'RESOLVED' ? '关闭工单' : '解决并关闭' }}
         </el-button>
+      </div>
+    </div>
+
+    <!-- 待审核提示：客服在工单大厅申请负责处理该工单 -->
+    <div class="review-bar" v-if="status === 'PENDING_REVIEW' && isStaff">
+      <el-icon class="rb-icon"><UserFilled /></el-icon>
+      <span class="rb-text">
+        <b>{{ applicantName || '有客服' }}</b> 申请负责处理该工单，等待审核
+        <span class="rb-time" v-if="applyTime">（{{ fmtShort(applyTime) }}）</span>
+      </span>
+      <div class="rb-actions" v-if="isReviewer">
+        <el-button size="small" type="success" @click="doReview(true)">通过</el-button>
+        <el-button size="small" type="danger" plain @click="doReview(false)">驳回</el-button>
       </div>
     </div>
 
@@ -300,8 +317,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, MagicStick, Refresh, Connection } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, MagicStick, Refresh, Connection, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store/auth'
 import api from '../api'
 
@@ -312,6 +329,8 @@ const auth = useAuthStore()
 const ticketId = computed(() => route.params.id)
 const me = computed(() => auth.user || {})
 const isStaff = computed(() => ['ADMIN', 'SUPERVISOR', 'AGENT'].includes(auth.role))
+// 接单申请审核仅主管与管理员可操作
+const isReviewer = computed(() => ['ADMIN', 'SUPERVISOR'].includes(auth.role))
 
 const loading = ref(true)
 const detail = ref(null)
@@ -386,7 +405,7 @@ const displayPhone = computed(() => {
 })
 
 const statusMap = {
-  PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '处理中',
+  PENDING: '待分配', PENDING_REVIEW: '待审核', ASSIGNED: '待受理', PROCESSING: '处理中',
   WAITING: '待客户确认', RESOLVED: '已解决', CLOSED: '已关闭'
 }
 const statusLabel = computed(() => statusMap[status.value] || status.value || '—')
@@ -398,6 +417,13 @@ const sourceLabel = computed(() => sourceMap[val(ticket.value, 'source')] || val
 const canReply = computed(() => status.value && !['CLOSED'].includes(status.value))
 const canAssign = computed(() => ['PENDING', 'ASSIGNED', 'PROCESSING'].includes(status.value))
 const canResolve = computed(() => ['ASSIGNED', 'PROCESSING', 'RESOLVED'].includes(status.value))
+// 待审核工单只有主管与管理员能审核
+const canReview = computed(() => isReviewer.value && status.value === 'PENDING_REVIEW')
+
+/* ===== 接单申请信息：客服在工单大厅申请后由后端带出，供审核展示 ===== */
+const applyInfo = computed(() => detail.value?.apply || null)
+const applicantName = computed(() => val(applyInfo.value, 'applicantName') || '')
+const applyTime = computed(() => val(applyInfo.value, 'applyAt') || '')
 
 /* ===== 客户活跃度标签（库里没有 VIP 字段，按历史工单数分档） ===== */
 const customerLevel = computed(() => {
@@ -434,7 +460,8 @@ const slaText = computed(() => {
 const actionMap = {
   CREATE: '创建工单', ASSIGN: '分配工单', ACCEPT: '客服接单', REPLY: '回复工单',
   RESOLVE: '提交解决方案', CONFIRM: '客户确认', CLOSE: '关闭工单',
-  REOPEN: '重新打开', RATE: '客户评价', URGE: '客户催办'
+  REOPEN: '重新打开', RATE: '客户评价', URGE: '客户催办',
+  APPLY: '申请处理', REVIEW: '申请审核'
 }
 const timeline = computed(() => {
   const items = []
@@ -708,6 +735,28 @@ function goBack() {
   router.push('/tickets')
 }
 
+/* 审核客服的接单申请：通过则工单归申请人，驳回则退回待分配 */
+async function doReview(approve) {
+  let remark = ''
+  try {
+    const r = await ElMessageBox.prompt(
+      approve
+        ? `确认将工单分配给「${applicantName.value || '申请人'}」？通过后由其继续处理。`
+        : '请填写驳回原因（该工单将退回待分配状态）',
+      approve ? '审核通过' : '审核驳回',
+      {
+        inputPlaceholder: approve ? '备注（可选）' : '驳回原因',
+        inputValidator: v => (approve || (v && v.trim())) ? true : '请填写驳回原因',
+        type: approve ? 'info' : 'warning'
+      }
+    )
+    remark = r.value || ''
+  } catch (e) { return }
+  await api.post(`/tickets/${ticketId.value}/review`, { approve, remark })
+  ElMessage.success(approve ? '已通过，工单已分配给申请人' : '已驳回，工单退回待分配')
+  await load()
+}
+
 function goCustomerTickets() {
   const name = customerName.value
   router.push({ path: '/tickets', query: name ? { keyword: name } : {} })
@@ -769,6 +818,8 @@ onBeforeUnmount(() => {
   border: 1px solid transparent; white-space: nowrap;
 }
 .st-PENDING { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+/* 待审核：客服已申请、等待主管审核 */
+.st-PENDING_REVIEW { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
 .st-ASSIGNED { background: #fef3c7; color: #92400e; border-color: #fde68a; }
 .st-PROCESSING { background: #dbeafe; color: #1d4ed8; border-color: #bfdbfe; }
 .st-WAITING { background: #fef3c7; color: #92400e; border-color: #fde68a; }
@@ -779,6 +830,18 @@ onBeforeUnmount(() => {
 .pr-MEDIUM { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
 .pr-LOW { background: #f8fafc; color: #64748b; border-color: #e2e8f0; }
 .tb-right { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* 待审核提示条 */
+.review-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px;
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px;
+  font-size: 13px; color: #92400e;
+}
+.rb-icon { font-size: 16px; flex-shrink: 0; }
+.rb-text { flex: 1; min-width: 0; }
+.rb-time { color: #b45309; font-size: 12px; }
+.rb-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 /* ===== 三栏 ===== */
 .td-grid {

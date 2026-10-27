@@ -130,8 +130,9 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 🧑‍💼 客服人员 AGENT
    ├─ 工作台看板        我的待办
-   ├─ 工单管理          接单、处理、回复、提交方案
-   ├─ 知识库            检索参考
+   ├─ 工单管理          接单、处理、回复、提交方案（仅本人负责的工单）
+   ├─ 工单大厅          全团队工单视图，可申请认领未分配工单（提交后待主管审核）
+   ├─ 知识库            检索参考（只读，无新建/编辑/删除入口）
    └─ 智能问答          AI 辅助回复
 
 👤 客户 CUSTOMER（客户端独立 5 项菜单，业务数据仅限本人）
@@ -143,8 +144,12 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    └─ 个人中心          资料修改、头像上传、修改密码
 ```
 
-> 客户端的「我的工单」后端做了资源级过滤（`ticket.customer_id = 当前用户`），
-> 即使手工拼接 URL 也查不到他人工单；知识库的写接口（新增/删除）仅对 ADMIN/SUPERVISOR/AGENT 开放。
+> **数据边界**：客户端「我的工单」按 `ticket.customer_id = 当前用户` 过滤；客服端「工单管理」按
+> `ticket.assignee_id = 当前用户` 过滤（只能看到自己负责的工单，全团队视图在「工单大厅」）；
+> 主管与管理员看全站。即使手工拼接 URL 也查不到范围之外的工单。
+>
+> **知识库维护权限**：写接口（新增 / 编辑 / 删除）仅对 **ADMIN / SUPERVISOR** 开放，
+> 客服与客户为只读，后端 `@RequireRole` 与前端按钮可见性双重拦截。
 
 ### 核心功能
 
@@ -158,8 +163,17 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    ├─ 关闭/重开        问题闭环或重新激活
    └─ 客户评价         满意度评分
 
+🎪 工单大厅（客服专属入口）
+   ├─ 全团队视图      可查看非本人负责的全部工单（含未分配、他人处理中）
+   ├─ 申请认领        未分配的待分配工单可申请负责处理，状态转「待审核」
+   ├─ 申请审核        主管/管理员在详情页或大厅列表「通过/驳回」
+   │                  通过 → 工单分配给申请人（待受理）；驳回 → 退回待分配
+   └─ 申请留痕        申请与审核写入工单时间线，并通知申请人与审核人
+
 📚 知识库
-   ├─ 文章管理        分类、编辑、审核、发布、热门排行
+   ├─ 文章管理        分类、编辑、审核、发布、热门排行（仅 ADMIN/SUPERVISOR）
+   ├─ 详情弹窗        标题 + 分类/关键词标签 + 浏览/更新时间/来源 + 问题概述 + 正文
+   │                  正文列表自动渲染为带编号的步骤卡片，便于照着排查
    ├─ 全文检索        关键词搜索（bigram 模糊匹配）
    └─ 热门排行        按浏览量排序
 
@@ -238,10 +252,11 @@ intelligent-service-desk/
 │       ├── views/                    # 页面组件
 │       │   ├── Login.vue             # 登录/注册（含身份选择）
 │       │   ├── Dashboard.vue         # 工作台（客户端为 Hero+快捷入口+三栏首页）
-│       │   ├── Tickets.vue           # 工单列表（含新建工单弹窗）
-│       │   ├── TicketDetail.vue      # 工单详情（三栏：客户/时间线/右栏 AI）
+│       │   ├── Tickets.vue           # 工单列表（含新建工单弹窗，客服仅见本人负责）
+│       │   ├── TicketsHall.vue       # 工单大厅（全团队视图 / 申请认领 / 审核）
+│       │   ├── TicketDetail.vue      # 工单详情（三栏：客户/时间线/右栏 AI，含申请审核）
 │       │   ├── Customers.vue         # 客户管理
-│       │   ├── Knowledge.vue         # 知识库
+│       │   ├── Knowledge.vue         # 知识库（详情弹窗 + 步骤化正文）
 │       │   ├── Chat.vue              # 智能问答（含会话侧栏）
 │       │   ├── Stats.vue             # 数据统计
 │       │   └── System.vue            # 系统管理
@@ -302,7 +317,22 @@ intelligent-service-desk/
               已关闭 CLOSED ← 已解决 RESOLVED ←（客户确认）
                   ↑____________________________|
                         （重新打开 REOPEN）
+
+待分配 PENDING ──客服申请──→ 待审核 PENDING_REVIEW ──主管通过──→ 待受理 ASSIGNED（归申请人）
+                                        └──────────主管驳回──→ 待分配 PENDING
 ```
+
+| 状态 | 含义 | 进入方式 |
+| --- | --- | --- |
+| `PENDING` | 待分配 | 客户建单后默认状态；申请被驳回时退回 |
+| `PENDING_REVIEW` | 待审核 | 客服在「工单大厅」申请负责处理未分配工单 |
+| `ASSIGNED` | 待受理 | 主管指派，或接单申请审核通过后自动分配给申请人 |
+| `PROCESSING` | 处理中 | 客服接单 |
+| `WAITING` | 待客户确认 | 客服提交解决方案 |
+| `RESOLVED` / `CLOSED` | 已解决 / 已关闭 | 客户确认解决 → 客服关闭 |
+
+> `PENDING_REVIEW` 复用现有 `ticket.status`（`VARCHAR(24)`）字段，**无需变更表结构**；
+> 申请人与申请时间取自 `ticket_history` 中 `action='APPLY'` 的最新一条记录，同样不新增表。
 
 ### 核心关系说明
 
@@ -372,9 +402,12 @@ intelligent-service-desk/
 
 | 方法 | 路径            | 说明                              | 认证 |
 | ---- | --------------- | --------------------------------- | ---- |
-| GET  | `/`             | 工单列表（按角色过滤数据范围）    | ✅    |
+| GET  | `/`             | 工单列表（按角色过滤：客户看本人、客服看自己负责的） | ✅    |
+| GET  | `/hall`         | 工单大厅：非本人负责的全部工单，带 `canApply` 标记 | ✅ 仅 AGENT |
 | POST | `/`             | 创建工单（支持 Idempotency-Key）  | ✅    |
-| GET  | `/{id}`         | 工单详情（消息/历史/客户画像/推荐知识） | ✅    |
+| GET  | `/{id}`         | 工单详情（消息/历史/客户画像/推荐知识/申请信息） | ✅    |
+| POST | `/{id}/apply`   | 申请负责处理未分配工单（状态转待审核） | ✅ 仅 AGENT |
+| POST | `/{id}/review`  | 审核接单申请（`approve` 通过 / 驳回） | ✅ 仅 ADMIN/SUPERVISOR |
 | POST | `/{id}/assign`  | 分配/转派                         | ✅    |
 | POST | `/{id}/accept`  | 接单                              | ✅    |
 | POST | `/{id}/messages`| 回复 / 内部备注                   | ✅    |
@@ -391,9 +424,9 @@ intelligent-service-desk/
 | GET  | `/`            | 文章分页列表             | ✅    |
 | GET  | `/categories`  | 分类列表（Redis 缓存）   | ✅    |
 | GET  | `/hot`         | 热门文章（Redis 缓存）   | ✅    |
-| POST | `/`            | 新建文章                 | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
-| PUT  | `/{id}`        | 编辑文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
-| DELETE| `/{id}`       | 删除文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR/AGENT |
+| GET  | `/{id}`        | 文章详情（浏览数 +1）    | ✅    |
+| POST | `/`            | 新建 / 更新文章          | ✅ 仅 ADMIN/SUPERVISOR |
+| DELETE| `/{id}`       | 删除文章（失效缓存）     | ✅ 仅 ADMIN/SUPERVISOR |
 
 ### AI 问答模块 `/api/ai`
 
@@ -434,6 +467,7 @@ intelligent-service-desk/
 | 方法   | 路径                   | 说明                     |
 | ------ | ---------------------- | ------------------------ |
 | POST   | `/api/ai/chat`         | 智能问答（RAG，多轮）    |
+| POST   | `/api/ai/chat/stream`  | 流式智能问答（SSE）      |
 | POST   | `/api/ai/summarize`    | 工单摘要                 |
 | POST   | `/api/ai/classify`     | 分类推荐                 |
 | POST   | `/api/ai/draft`        | 回复草稿                 |
@@ -448,6 +482,38 @@ intelligent-service-desk/
 ---
 
 ## 🤖 AI 服务详解
+
+### 本地启动
+
+```bash
+cd ai-service
+
+# 1. 准备虚拟环境（依赖全部装在这里，系统 Python 没有）
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux / macOS
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. （可选）配置云端模型：复制 .env.example 为 .env 并填写 AI_API_KEY
+# cp .env.example .env
+
+# 3. 启动服务（等价于 uvicorn app.main:app --host 0.0.0.0 --port 8000）
+python main.py
+```
+
+启动后访问 `http://localhost:8000/docs` 查看交互式 API 文档。
+
+| 方式 | 命令 | 说明 |
+| --- | --- | --- |
+| 推荐 | `python main.py` | 入口为 `ai-service/main.py`，自动补 `sys.path`，端口读 `AI_SERVICE_PORT` |
+| 等价 | `uvicorn app.main:app --host 0.0.0.0 --port 8000` | 需在 `ai-service` 目录下执行 |
+| 开发调试 | `AI_RELOAD=true python main.py` | 开启热重载，改代码自动重启 |
+
+> ⚠️ **必须使用 `.venv` 里的 Python**。直接跑系统 Python 会缺少 `redis` 等依赖，
+> 服务会静默降级为内存会话并打印「未找到 redis 依赖包，无法连接 Redis」——
+> 此时 Redis 本身是通的，只是解释器选错了。提示符前出现 `(.venv)` 才算激活成功。
 
 ### 架构概览
 
@@ -466,6 +532,7 @@ intelligent-service-desk/
 
 ```
 ai-service/
+├── main.py                      # 启动入口：python main.py
 ├── app/
 │   ├── main.py                  # 应用装配（仅创建 app + 挂载路由，约 40 行）
 │   ├── core/
@@ -499,8 +566,10 @@ ai-service/
 │   └── utils/                   # SSE 编码、文本处理
 ├── requirements.txt
 ├── .env.example                 # 配置模板
-└── README.md
 ```
+
+> 各目录职责：`api/` 只做 HTTP 形态，`services/` 只编排流程，`prompts/` 只放系统提示词，
+> `llm/` 只调用模型，`retrieval/` 只做本地检索，`storage/` 只做会话持久化。
 
 ### AI 角色与系统提示词
 
@@ -554,7 +623,7 @@ Java 侧在转发请求前装配好上下文（`AiContextService`），Python �
 | FastAPI 服务未启动         | Java 侧直接走本地知识检索                        |
 | Redis 不可用               | 会话降级内存，缓存回源 MySQL，核心业务不受影响   |
 
-### 配置云端模型
+### 配置项与云端模型
 
 编辑 `ai-service/.env`（复制 `.env.example`）：
 
@@ -566,7 +635,35 @@ AI_TIMEOUT_SECONDS=45
 AI_TEMPERATURE=0.3
 ```
 
-> Java 侧通过 `app.ai-service.base-url`（默认 `http://localhost:8000`）调用 FastAPI。
+完整环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AI_SERVICE_PORT` | `8000` | 服务端口（`python main.py` 与 uvicorn 共用） |
+| `AI_HOST` | `0.0.0.0` | 监听地址（仅 `python main.py` 使用） |
+| `AI_RELOAD` | `false` | 是否开启热重载 |
+| `AI_ENABLED` | `true` | 是否启用云端模型 |
+| `AI_BASE_URL` | `https://api.deepseek.com/v1` | 云端模型 API 地址（OpenAI 兼容） |
+| `AI_API_KEY` | 空 | 云端模型密钥，留空则走本地检索降级 |
+| `AI_MODEL` | `deepseek-chat` | 模型名 |
+| `AI_TIMEOUT_SECONDS` | `45` | 调用超时（秒） |
+| `AI_TEMPERATURE` | `0.3` | 采样温度 |
+| `AI_ASSISTANT_NAME` | `小智` | AI 客服名字（写进系统提示词，Java 侧欢迎语读同名变量） |
+| `AI_COMPANY_NAME` | `智能服务台` | AI 所属平台名 |
+| `AI_TONE` | `亲切、专业、有耐心…` | AI 语气设定 |
+| `AI_ANSWER_MAX_CHARS` | `200` | 单次回答字数上限（提示词约束） |
+| `KNOWLEDGE_TOP_K` | `5` | 知识检索返回条数 |
+| `HISTORY_WINDOW` | `8` | 多轮上下文取最近 N 条 |
+
+> 未配置 `AI_API_KEY` 时服务自动降级为本地知识检索 / 关键词匹配，不影响核心功能。
+
+### 与 Java 后端的协作
+
+Java 业务后端（Spring Boot）作为主控方，通过 HTTP 调用本服务：
+
+- Java 侧配置 `app.ai-service.base-url`（默认 `http://localhost:8000`，可用环境变量 `AI_SERVICE_BASE_URL` 覆盖）
+- Java 将用户身份、近期工单、知识库目录与命中正文装配好后传给本服务，由本服务完成模型调用与增强生成
+- 本服务不可用或模型调用失败时，Java 自动降级为本地知识库检索
 
 ---
 

@@ -47,16 +47,16 @@ public class KnowledgeController {
         return ApiResponse.ok(knowledgeService.detail(id));
     }
 
-    /** 新增或更新文章（客户只读，不允许维护知识库） */
+    /** 新增或更新文章（仅主管与管理员可维护知识库，客服与客户只读） */
     @PostMapping
-    @RequireRole({"ADMIN", "SUPERVISOR", "AGENT"})
+    @RequireRole({"ADMIN", "SUPERVISOR"})
     public ApiResponse<KnowledgeArticle> save(@RequestBody Map<String, Object> body) {
         return ApiResponse.ok(knowledgeService.save(body));
     }
 
-    /** 删除文章（客户只读，不允许维护知识库） */
+    /** 删除文章（仅主管与管理员可维护知识库，客服与客户只读） */
     @DeleteMapping("/{id}")
-    @RequireRole({"ADMIN", "SUPERVISOR", "AGENT"})
+    @RequireRole({"ADMIN", "SUPERVISOR"})
     public ApiResponse<Void> delete(@PathVariable Long id) {
         knowledgeService.delete(id);
         return ApiResponse.ok();

@@ -92,10 +92,13 @@ const route = useRoute()
 const router = useRouter()
 
 const statusMap = {
-  PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '处理中',
+  PENDING: '待分配', PENDING_REVIEW: '待审核', ASSIGNED: '待受理', PROCESSING: '处理中',
   WAITING: '待客户确认', RESOLVED: '已解决', CLOSED: '已关闭'
 }
-const statusTypeMap = { PENDING: 'info', ASSIGNED: 'warning', PROCESSING: 'primary', WAITING: 'warning', RESOLVED: 'success', CLOSED: 'info' }
+const statusTypeMap = {
+  PENDING: 'info', PENDING_REVIEW: 'warning', ASSIGNED: 'warning', PROCESSING: 'primary',
+  WAITING: 'warning', RESOLVED: 'success', CLOSED: 'info'
+}
 const statusType = s => statusTypeMap[s] || 'info'
 const priorityMap = { URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' }
 const priorityTypeMap = { URGENT: 'danger', HIGH: 'warning', MEDIUM: 'primary', LOW: 'info' }

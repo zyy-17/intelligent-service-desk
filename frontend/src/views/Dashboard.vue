@@ -489,8 +489,8 @@ const priorityLabel = p => priorityMap[p] || p
 const priorityType = p => priorityTypeMap[p] || 'info'
 const shortTime = t => (t ? t.replace('T', ' ').substring(5, 16) : '')
 
-const statusMap = { PENDING: '待分配', ASSIGNED: '待受理', PROCESSING: '处理中', WAITING: '待确认', RESOLVED: '已解决', CLOSED: '已关闭' }
-const statusTypeMap = { PENDING: 'info', ASSIGNED: 'warning', PROCESSING: 'primary', WAITING: 'warning', RESOLVED: 'success', CLOSED: 'info' }
+const statusMap = { PENDING: '待分配', PENDING_REVIEW: '待审核', ASSIGNED: '待受理', PROCESSING: '处理中', WAITING: '待确认', RESOLVED: '已解决', CLOSED: '已关闭' }
+const statusTypeMap = { PENDING: 'info', PENDING_REVIEW: 'warning', ASSIGNED: 'warning', PROCESSING: 'primary', WAITING: 'warning', RESOLVED: 'success', CLOSED: 'info' }
 const statusLabel = s => statusMap[s] || s
 const statusType = s => statusTypeMap[s] || 'info'
 

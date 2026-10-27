@@ -4,6 +4,7 @@ import com.zyyqq.desk.common.ApiResponse;
 import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.common.PageResult;
 import com.zyyqq.desk.security.AuthContext;
+import com.zyyqq.desk.security.RequireRole;
 import com.zyyqq.desk.service.RedisSupport;
 import com.zyyqq.desk.service.TicketService;
 import org.springframework.web.bind.annotation.*;
@@ -38,6 +39,35 @@ public class TicketController {
     @GetMapping("/{id}")
     public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {
         return ApiResponse.ok(ticketService.detail(id));
+    }
+
+    /** 工单大厅：查看非本人负责的全部工单（客服用于申请认领，主管/管理员用于审核） */
+    @GetMapping("/hall")
+    @RequireRole({"AGENT", "ADMIN", "SUPERVISOR"})
+    public ApiResponse<PageResult<Map<String, Object>>> hall(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int pageSize,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword) {
+        return ApiResponse.ok(ticketService.hall(page, pageSize, status, keyword));
+    }
+
+    /** 客服申请负责处理未分配工单（状态转为待审核） */
+    @PostMapping("/{id}/apply")
+    @RequireRole({"AGENT"})
+    public ApiResponse<Void> apply(@PathVariable Long id) {
+        ticketService.apply(id);
+        return ApiResponse.ok();
+    }
+
+    /** 主管/管理员审核接单申请（通过则工单归申请人，驳回则退回待分配） */
+    @PostMapping("/{id}/review")
+    @RequireRole({"ADMIN", "SUPERVISOR"})
+    public ApiResponse<Void> review(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Object approve = body.get("approve");
+        boolean pass = approve == null || Boolean.parseBoolean(String.valueOf(approve));
+        ticketService.review(id, pass, body.get("remark") == null ? null : String.valueOf(body.get("remark")));
+        return ApiResponse.ok();
     }
 
     /** 创建工单（带幂等去重） */

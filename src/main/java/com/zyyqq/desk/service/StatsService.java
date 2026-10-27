@@ -47,7 +47,10 @@ public class StatsService {
     private Map<String, Object> loadOverview() {
         Map<String, Object> data = new HashMap<>();
         long total = ticketRepository.countAll();
-        long pending = ticketRepository.countByStatus("PENDING") + ticketRepository.countByStatus("ASSIGNED");
+        // 待处理口径：待分配 + 待审核（客服已申请待主管审）+ 待受理
+        long pending = ticketRepository.countByStatus("PENDING")
+                + ticketRepository.countByStatus("PENDING_REVIEW")
+                + ticketRepository.countByStatus("ASSIGNED");
         long processing = ticketRepository.countByStatus("PROCESSING");
         long resolved = ticketRepository.countByStatus("RESOLVED") + ticketRepository.countByStatus("CLOSED");
 
