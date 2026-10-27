@@ -93,9 +93,10 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 | FastAPI    | 0.115+ | 高性能 Web 框架                                    |
 | Uvicorn    | 0.34+  | ASGI 服务器                                        |
 | Pydantic   | 2.10+  | 数据校验                                           |
-| HTTPX      | 0.28+  | 调用云端大模型 API（OpenAI 兼容）                  |
+| HTTPX      | 0.28+  | 调用大模型 API（云端与 Ollama 均为 OpenAI 兼容）    |
 | Redis (py) | 5.2+   | AI 会话存储（db1，降级内存）                       |
 | 云端 API   | —      | DeepSeek / 通义 / Kimi / 智谱 等 OpenAI 兼容接口   |
+| Ollama     | —      | 本地兜底模型（默认 qwen2.5-coder:7b，支持多模型轮换） |
 
 ### 中间件
 
@@ -188,8 +189,10 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 🤖 智能问答
    ├─ 多轮会话        新建/切换/删除会话、加载历史
-   ├─ RAG 问答        云端模型 + 知识库检索
-   └─ 降级兜底        模型不可用时走本地知识检索
+   ├─ RAG 问答        向量检索知识点 + 云端模型生成，回答附「依据文章」卡片
+   ├─ 依据可点        点击引用卡片直接查看文章正文，历史会话里同样保留
+   ├─ 会话保持        切页面/刷新都接着原对话，新建会话或退出登录才清空
+   └─ 三级兜底        云端 API → 本地 Ollama（多模型轮换）→ 本地向量检索
 
 📊 数据统计
    ├─ 状态分布 / 优先级分布 / 满意度分布
@@ -291,8 +294,8 @@ intelligent-service-desk/
 │   │   ├── api/                      # 路由层（health / chat / sessions / ticket）
 │   │   ├── services/                 # 业务层（问答编排 / 会话 / 工单辅助）
 │   │   ├── prompts/                  # 提示词层（各场景系统角色提示词）
-│   │   ├── llm/                      # 模型层（OpenAI 兼容调用 + 错误码）
-│   │   ├── retrieval/                # 检索层（bigram 匹配 / 降级回答）
+│   │   ├── llm/                      # 模型层（OpenAI 兼容调用 + 多模型路由 + 错误码）
+│   │   ├── retrieval/                # 检索层（向量检索 + 上下文 + 降级回答）
 │   │   ├── storage/                  # 存储层（会话 Redis 优先 / 内存降级）
 │   │   ├── schemas/                  # 数据模型（按场景拆分）
 │   │   └── utils/                    # 工具（SSE 编码 / 文本处理）
@@ -545,13 +548,16 @@ python main.py
 ### 架构概览
 
 ```
-用户提问 → Spring Boot 后端 → FastAPI AI 服务 → 云端大模型 API → 返回结果
+用户提问 → Spring Boot 后端 → FastAPI AI 服务 → 云端大模型 API（首选）
+                │                    │        └─ 未配置密钥/调用失败 → 本地 Ollama（候选模型依次尝试）
+                │                    │                                        └─ Ollama 也失败 → 本地向量检索
                 │                    │
-                │                    ├─ 成功：返回 AI 生成内容（RAG）
-                │                    └─ 失败：降级本地知识检索（fallback:true）
+                │                    └─ 全部失败：本地知识检索作答（fallback:true）
                 │
                 └─ FastAPI 停机时：Java 直接走本地知识库检索兜底
 ```
+
+模型调用按「云端 → Ollama」顺序逐个尝试，每个来源内部再按候选列表顺序换模型，全部失效才降级到本地知识库检索。
 
 ### AI 服务文件结构
 
@@ -582,10 +588,12 @@ ai-service/
 │   │   ├── draft.py             #   回复草稿
 │   │   └── suggest.py           #   工单处置建议
 │   ├── llm/                     # 模型层
-│   │   ├── client.py            #   OpenAI 兼容调用（一次 / 流式）
+│   │   ├── client.py            #   单端点调用（OpenAI 兼容，云端与 Ollama 共用）
+│   │   ├── router.py            #   云端→Ollama 多模型路由，失败自动换下一个
 │   │   └── errors.py            #   LLMError 错误码
 │   ├── retrieval/               # 检索层
-│   │   ├── search.py            #   bigram 匹配 + 上下文构建
+│   │   ├── vector.py            #   TF-IDF 稀疏向量 + 余弦相似度索引
+│   │   ├── search.py            #   向量检索入口、上下文构建、引用整理
 │   │   └── fallback.py          #   无模型时的知识库回答
 │   ├── storage/
 │   │   └── session_store.py     #   会话存储（Redis db1 优先，降级内存）
@@ -628,7 +636,7 @@ Java 侧在转发请求前装配好上下文（`AiContextService`），Python �
 | 用户身份 | 称呼、角色、公司、部门、注册时间、工单概况（累计/处理中/已解决） | `sys_user` + `ticket` | 按角色限定归属范围 |
 | 近期工单 | 工单号、主题、状态、优先级、分类、创建时间、解决方案 | `ticket` | 最近 5 条，方案截断 200 字 |
 | 知识库目录 | 全部已发布文章的标题、摘要、关键词、分类 | `knowledge_article` | 最热 60 篇，无正文 |
-| 知识库正文 | 与问题最相关的文章全文 | 本地 bigram 检索 | 5 篇，每篇截断 |
+| 知识库正文 | 与问题最相关的文章全文 | 向量检索（TF-IDF + 余弦相似度） | 5 篇，每篇截断 700 字 |
 
 归属规则：**客户**看自己提交的工单，**客服**看自己处理的工单，**管理员/主管**看全站。这样客户问"我的工单怎么样了"，AI 能直接报出工单号和状态，而不是让用户自己去查。
 
@@ -639,28 +647,57 @@ Java 侧在转发请求前装配好上下文（`AiContextService`），Python �
 - **数据存储**：优先 Redis（`192.168.100.128:6379` db1），Redis 不可用时自动降级进程内存
 - **多轮上下文**：每次问答自动记录会话，取最近 8 条作为上下文
 - **自动建会话**：首条消息无 `session_id` 时自动创建，并返回 `session_id` 供前端记忆
+- **引用持久化**：助手消息落库时同时保存 `references`（引用的知识文章）、`grounded`（是否有可靠依据）、
+  `model`（实际使用的模型），重新打开历史会话时「回答依据」卡片与无依据提示都会原样还原
+- **前端会话保持**：当前会话 ID 按用户存在 `localStorage`，切到别的页面再回来 / 刷新都接着原对话；
+  手动「新建会话」或退出登录才清空
 - **操作**：新建 / 列表 / 加载指定会话 / 删除
 
 ### 降级机制
 
-| 场景                       | 处理                                             |
-| -------------------------- | ------------------------------------------------ |
-| 未配置 `AI_API_KEY`        | 走本地知识检索（bigram 匹配）                    |
-| 云端模型调用失败/超时      | 降级本地知识检索，返回 `fallback:true`           |
-| FastAPI 服务未启动         | Java 侧直接走本地知识检索                        |
-| Redis 不可用               | 会话降级内存，缓存回源 MySQL，核心业务不受影响   |
+模型调用分三级，前一级不可用自动落到下一级，全部失效才由本地知识库作答：
 
-### 配置项与云端模型
+| 场景 | 处理 |
+| --- | --- |
+| 已配置 `AI_API_KEY` 且调用成功 | 用云端模型生成（RAG），`fallback:false` |
+| 未填 `AI_API_KEY` / `AI_ENABLED=false` | 跳过云端，直接用 Ollama |
+| 云端超时、限流、返回非 200、返回空 | 自动换云端下一个候选模型，再换 Ollama 候选模型 |
+| 首选 Ollama 模型加载失败 | 换 `OLLAMA_CHAT_MODELS` 里的下一个模型 |
+| Ollama 未启动 / 全部候选失败 | 降级本地向量检索作答，`fallback:true`，`model` 显示「本地知识库检索」 |
+| 流式已输出部分内容后中断 | 保留已输出文本，不再追加兜底，避免两段回答拼接 |
+| FastAPI 服务未启动 | Java 侧直接走本地知识检索 |
+| Redis 不可用 | 会话降级内存，缓存回源 MySQL，核心业务不受影响 |
 
-编辑 `ai-service/.env`（复制 `.env.example`）：
+### 模型优先级与多模型切换
+
+优先级和候选模型全部在 `ai-service/.env` 里配置，**改完重启 AI 服务生效**，前端不需要任何操作：
 
 ```ini
+# 云端（优先级最高；填了 AI_API_KEY 才会启用）
+AI_ENABLED=true
 AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=sk-你的密钥
-AI_MODEL=deepseek-chat
-AI_TIMEOUT_SECONDS=45
-AI_TEMPERATURE=0.3
+AI_MODEL=deepseek-chat                  # AI_MODELS 为空时只用这一个
+AI_MODELS=deepseek-chat,qwen-plus        # 候选列表，越靠前越优先，失败自动换下一个
+
+# 本地 Ollama 兜底（云端不可用时接管）
+OLLAMA_CHAT_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+OLLAMA_CHAT_MODELS=qwen2.5-coder:7b,deepseek-r1:1.5b
+OLLAMA_TIMEOUT_SECONDS=180              # 7B 模型首次加载慢，超时放宽
 ```
+
+实际生效顺序就是三段配置按「云端候选 → Ollama 候选」串起来的顺序，例如上面的配置会依次尝试：
+`deepseek-chat → qwen-plus → qwen2.5-coder:7b → deepseek-r1:1.5b → 本地知识库检索`。
+
+> ⚠️ 变量名用的是 `OLLAMA_CHAT_MODELS` 而不是 `OLLAMA_MODELS`：后者是 Ollama 官方用于指定
+> **模型文件存放目录**的环境变量（本机通常已存在），同名会互相干扰。
+
+Ollama 的接入走它的 **OpenAI 兼容端点** `/v1/chat/completions`，所以与云端共用同一套调用代码；
+切换本机其他模型时，先用 `ollama list` 看模型名，再把它加到 `OLLAMA_CHAT_MODELS` 最前面即可。
+
+每次回答实际用了哪个模型，会随 `done` 事件下发并显示在聊天气泡下方（如 `qwen2.5-coder:7b · Ollama`），
+方便确认兜底是否生效。
 
 完整环境变量：
 
@@ -671,18 +708,27 @@ AI_TEMPERATURE=0.3
 | `AI_RELOAD` | `false` | 是否开启热重载 |
 | `AI_ENABLED` | `true` | 是否启用云端模型 |
 | `AI_BASE_URL` | `https://api.deepseek.com/v1` | 云端模型 API 地址（OpenAI 兼容） |
-| `AI_API_KEY` | 空 | 云端模型密钥，留空则走本地检索降级 |
-| `AI_MODEL` | `deepseek-chat` | 模型名 |
-| `AI_TIMEOUT_SECONDS` | `45` | 调用超时（秒） |
-| `AI_TEMPERATURE` | `0.3` | 采样温度 |
+| `AI_API_KEY` | 空 | 云端模型密钥，留空则跳过云端直接用 Ollama |
+| `AI_MODEL` | `deepseek-chat` | 单模型名（`AI_MODELS` 为空时生效） |
+| `AI_MODELS` | 空 | 云端候选模型，逗号分隔、越靠前越优先，失败自动换下一个 |
+| `AI_TIMEOUT_SECONDS` | `45` | 云端调用超时（秒） |
+| `AI_TEMPERATURE` | `0.3` | 云端采样温度 |
+| `OLLAMA_CHAT_ENABLED` | `true` | 是否启用本地 Ollama 兜底 |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434/v1` | Ollama 的 OpenAI 兼容地址（必须以 `/v1` 结尾） |
+| `OLLAMA_API_KEY` | `ollama` | Ollama 不校验，占位即可 |
+| `OLLAMA_CHAT_MODELS` | `qwen2.5-coder:7b,deepseek-r1:1.5b` | Ollama 候选模型，逗号分隔、按顺序尝试 |
+| `OLLAMA_TIMEOUT_SECONDS` | `180` | 本地模型超时（7B 首次加载较慢） |
+| `OLLAMA_TEMPERATURE` | `0.3` | 本地模型采样温度 |
 | `AI_ASSISTANT_NAME` | `小智` | AI 客服名字（写进系统提示词，Java 侧欢迎语读同名变量） |
 | `AI_COMPANY_NAME` | `智能服务台` | AI 所属平台名 |
 | `AI_TONE` | `亲切、专业、有耐心…` | AI 语气设定 |
 | `AI_ANSWER_MAX_CHARS` | `200` | 单次回答字数上限（提示词约束） |
 | `KNOWLEDGE_TOP_K` | `5` | 知识检索返回条数 |
 | `HISTORY_WINDOW` | `8` | 多轮上下文取最近 N 条 |
+| `RETRIEVAL_MIN_SCORE` | `0.10` | 向量检索余弦相似度阈值，低于此值视为「知识库没覆盖」 |
+| `KNOWLEDGE_CONTEXT_CHARS` | `700` | 单篇知识正文拼进上下文的字数上限 |
 
-> 未配置 `AI_API_KEY` 时服务自动降级为本地知识检索 / 关键词匹配，不影响核心功能。
+> 云端与 Ollama 都不可用时，服务自动降级为本地向量检索，不影响核心功能。
 
 ### 与 Java 后端的协作
 
@@ -808,7 +854,10 @@ cd ai-service
 python -m venv .venv
 # Windows: .venv\Scripts\activate   Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
-# 配置密钥（可选，不配则走知识检索降级）
+# 配置（可选）：cp .env.example .env
+#   - 填 AI_API_KEY 用云端模型
+#   - 不填则自动用本机 Ollama 兜底（需先 ollama serve 并 pull 模型）
+#   - 云端和 Ollama 都不可用时走本地知识库检索
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```

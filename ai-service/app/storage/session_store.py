@@ -166,12 +166,16 @@ class SessionStore:
 
     # ---------- 消息 ----------
 
-    def append_message(self, sid: str, user_id: int, role: str, content: str) -> bool:
-        """向会话追加一条消息（截断保留最近 N 条）。"""
+    def append_message(self, sid: str, user_id: int, role: str, content: str,
+                       extra: Optional[dict] = None) -> bool:
+        """向会话追加一条消息（截断保留最近 N 条），extra 存放引用/来源等附加信息。"""
         data = self._load(sid)
         if not data or str(data["meta"].get("user_id")) != str(user_id):
             return False
         msg = {"role": role, "content": content, "ts": time.time()}
+        if extra:
+            # 值为 None 的键不落库，避免历史消息里出现一堆空字段
+            msg.update({k: v for k, v in extra.items() if v is not None})
         now = time.time()
         if self._redis is not None:
             key = self._k("session", "msgs", sid)

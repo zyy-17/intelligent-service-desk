@@ -63,6 +63,10 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       localStorage.removeItem('menus')
+      // 退出登录即放弃「上次打开的 AI 会话」记忆，避免下次登录直接进到旧对话
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('isd:chat:last-session'))
+        .forEach(k => localStorage.removeItem(k))
     }
   }
 })

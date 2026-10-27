@@ -9,7 +9,7 @@ import uuid
 from typing import Iterator, List, Optional, Tuple
 
 from ..core.config import settings
-from ..llm import LLMError, chat_completion, chat_completion_stream, is_configured
+from ..llm import LLMError, generate, has_endpoint, stream as model_stream
 from ..prompts import build_chat_messages
 from ..retrieval import build_context, fallback_answer, search_knowledge, to_references
 from ..schemas import ChatRequest, ChatResponse, KnowledgeBrief, KnowledgeItem, TicketBrief
@@ -24,6 +24,9 @@ TICKET_KEYWORDS = ("我的工单", "工单进度", "工单状态", "我的问题
 
 # 模型提示词里知识库目录的最大条数
 CATALOG_MAX = 40
+
+# 云端与 Ollama 都不可用时的来源标签，写进 done 事件与会话记录供前端展示
+LOCAL_FALLBACK_LABEL = "本地知识库检索"
 
 
 def new_task_id() -> str:
@@ -100,7 +103,7 @@ def _ticket_intent(question: str, req: ChatRequest) -> bool:
 
 
 def answer(req: ChatRequest) -> ChatResponse:
-    """一次性回答：模型可用则走 RAG，否则用知识检索结果作答。"""
+    """一次性回答：云端/Ollama 可用则走 RAG，全部失败才用知识检索兜底。"""
     task_id = new_task_id()
     question = req.question.strip()
     hits, messages = _prepare(req)
@@ -108,31 +111,34 @@ def answer(req: ChatRequest) -> ChatResponse:
     # 依据真实工单数据作答也算「有依据」，避免误提示知识库无覆盖
     grounded = bool(hits) or _ticket_intent(question, req)
 
-    if is_configured():
+    if has_endpoint():
         try:
-            text = chat_completion(messages)
+            text, endpoint = generate(messages)
+            source = _source_of(hits, fallback=False)
             return ChatResponse(
                 task_id=task_id,
                 answer=text,
-                source=_source_of(hits, fallback=False),
+                source=source,
                 references=references,
                 grounded=grounded,
                 fallback=False,
-                model=settings.ai_model,
-                session_id=record_turn(req, question, text),
+                model=endpoint.label,
+                session_id=record_turn(req, question, text, references, grounded, source, endpoint.label),
             )
         except LLMError as e:
-            logger.warning("云端模型调用失败，降级为知识检索：%s", e.message)
+            logger.warning("模型全部失败，降级为知识检索：%s", e.message)
 
     text = _fallback_text(question, hits, req)
+    source = _source_of(hits, fallback=True)
     return ChatResponse(
         task_id=task_id,
         answer=text,
-        source=_source_of(hits, fallback=True),
+        source=source,
         references=references,
         grounded=grounded,
         fallback=True,
-        session_id=record_turn(req, question, text),
+        model=LOCAL_FALLBACK_LABEL,
+        session_id=record_turn(req, question, text, references, grounded, source, LOCAL_FALLBACK_LABEL),
     )
 
 
@@ -144,33 +150,44 @@ def answer_stream(req: ChatRequest) -> Iterator[str]:
     references = to_references(hits)
     grounded = bool(hits) or _ticket_intent(question, req)
     fallback = False
+    used = {}
 
-    if is_configured():
+    def on_used(endpoint) -> None:
+        """记录实际用上的端点，写进 done 事件的 model 字段。"""
+        used["label"] = endpoint.label
+
+    parts: List[str] = []
+    if has_endpoint():
         try:
-            parts: List[str] = []
-            for piece in chat_completion_stream(messages):
+            for piece in model_stream(messages, on_used=on_used):
                 parts.append(piece)
                 yield encode("delta", piece)
             text = "".join(parts)
         except LLMError as e:
-            logger.warning("流式调用失败，降级为知识检索：%s", e.message)
-            text = _fallback_text(question, hits, req)
+            logger.warning("模型全部失败，降级为知识检索：%s", e.message)
             fallback = True
-            yield encode("delta", text)
+            if parts:
+                # 已经输出了一部分：保留现有文本，不再追加兜底，避免前端把两段回答拼在一起
+                text = "".join(parts)
+            else:
+                text = _fallback_text(question, hits, req)
+                yield encode("delta", text)
     else:
         text = _fallback_text(question, hits, req)
         fallback = True
         yield encode("delta", text)
 
     duration_ms = int((time.time() - start) * 1000)
+    source = _source_of(hits, fallback=fallback)
+    model = used.get("label") or LOCAL_FALLBACK_LABEL
     yield encode(
         "done",
         "",
-        source=_source_of(hits, fallback=fallback),
+        source=source,
         fallback=fallback,
         grounded=grounded,
         references=references,
-        model=None if fallback else settings.ai_model,
-        session_id=record_turn(req, question, text),
+        model=model,
+        session_id=record_turn(req, question, text, references, grounded, source, model),
         duration_ms=duration_ms,
     )

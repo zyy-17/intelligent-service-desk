@@ -66,6 +66,11 @@
               </div>
             </div>
 
+            <!-- 本轮实际使用的模型：用于确认云端/Ollama 兜底是否生效 -->
+            <div v-if="m.role === 'assistant' && m.model" class="msg-model">
+              <el-icon><Cpu /></el-icon><span>{{ m.model }}</span>
+            </div>
+
             <div v-if="m.meta" class="msg-meta">{{ m.meta }}</div>
           </div>
           <div v-if="m.role === 'user'" class="user-avatar" :style="{ background: myColor }">{{ meName.charAt(0) }}</div>
@@ -124,7 +129,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Promotion, Plus, Delete, ChatDotRound, Link, ArrowRight, WarningFilled } from '@element-plus/icons-vue'
+import { Promotion, Plus, Delete, ChatDotRound, Link, ArrowRight, WarningFilled, Cpu } from '@element-plus/icons-vue'
 import botAvatar from '../assets/ai-bot-avatar.png'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../store/auth'
@@ -139,6 +144,24 @@ const myColor = auth.user?.avatarColor || '#6366f1'
 
 const sessions = ref([])
 const currentSessionId = ref('')
+
+// 上次打开的会话：按用户区分存在本地，切到别的页面再回来 / 刷新都能接上，退出登录时清空
+const LAST_SESSION_PREFIX = 'isd:chat:last-session'
+
+// 当前用户的本地记忆 key（带用户 ID，避免同浏览器切换账号时串会话）
+function lastSessionKey() {
+  return `${LAST_SESSION_PREFIX}:${auth.user?.id ?? 'anon'}`
+}
+
+// 记住当前会话，供下次进入页面恢复
+function rememberSession(sid) {
+  if (sid) localStorage.setItem(lastSessionKey(), sid)
+}
+
+// 清除记住的会话（新建会话、删除会话、退出登录时调用）
+function forgetSession() {
+  localStorage.removeItem(lastSessionKey())
+}
 // 欢迎语由后端按用户身份生成（含 AI 名字小智与工单概况），拿不到时用默认文案
 const DEFAULT_WELCOME = '您好！我是 AI 智能助手小智 😊\n账号登录、账单支付、产品使用等问题都可以问我，也可以让我帮您提交工单。'
 const welcome = ref(DEFAULT_WELCOME)
@@ -223,6 +246,8 @@ async function loadGreeting() {
 
 function newSession() {
   currentSessionId.value = ''
+  // 手动新建会话即放弃上次会话的记忆
+  forgetSession()
   messages.value = [
     { role: 'assistant', content: welcome.value }
   ]
@@ -234,9 +259,14 @@ async function loadSession(s) {
   try {
     const data = await api.get(`/ai/sessions/${s.session_id}`)
     currentSessionId.value = s.session_id
+    rememberSession(s.session_id)
+    // 历史消息带回当轮的引用与可信标记，重新打开会话时「回答依据」不会消失
     const history = (data.messages || []).map(m => ({
       role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: m.content
+      content: m.content,
+      references: Array.isArray(m.references) ? m.references : [],
+      notGrounded: m.grounded === false,
+      model: m.model || ''
     }))
     messages.value = history.length
       ? history
@@ -347,10 +377,13 @@ async function send(q) {
     if (doneMeta) {
       assistantMsg.references = Array.isArray(doneMeta.references) ? doneMeta.references : []
       assistantMsg.notGrounded = doneMeta.grounded === false
+      // 实际使用的模型（云端 / Ollama 兜底 / 本地知识库检索）
+      assistantMsg.model = doneMeta.model || ''
     }
 
     if (doneMeta && doneMeta.session_id) {
       currentSessionId.value = doneMeta.session_id
+      rememberSession(doneMeta.session_id)
     }
     loadSessions()
   } catch (e) {
@@ -372,9 +405,13 @@ async function fallbackSend(q) {
       role: 'assistant',
       content: data.answer || '未获得有效回答',
       references: Array.isArray(data.references) ? data.references : [],
-      notGrounded: data.grounded === false
+      notGrounded: data.grounded === false,
+      model: data.model || ''
     })
-    if (data.session_id) currentSessionId.value = data.session_id
+    if (data.session_id) {
+      currentSessionId.value = data.session_id
+      rememberSession(data.session_id)
+    }
     loadSessions()
   } catch (e) {
     messages.value.push({ role: 'assistant', content: '抱歉，服务暂时不可用，请稍后重试。' })
@@ -386,15 +423,25 @@ async function scrollBottom() {
   if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight
 }
 
-onMounted(() => {
+onMounted(async () => {
   scrollBottom()
-  loadSessions()
-  loadGreeting()
+  await Promise.all([loadSessions(), loadGreeting()])
   // 首页 Hero 搜索 / 常见问题点击会带上 ?q= 关键字，进入后自动提问
   const preset = route.query.q
   if (preset && String(preset).trim()) {
     router.replace({ path: '/chat' })
     send(String(preset).trim())
+    return
+  }
+  // 恢复上次会话：从工单等页面切回来、或刷新页面都接着刚才那段对话
+  const lastSid = localStorage.getItem(lastSessionKey())
+  if (!lastSid) return
+  const hit = sessions.value.find(s => s.session_id === lastSid)
+  if (hit) {
+    await loadSession(hit)
+  } else {
+    // 会话已被删除或过期，清掉本地记忆以免每次进来都找一遍
+    forgetSession()
   }
 })
 </script>
@@ -474,6 +521,12 @@ onMounted(() => {
 .streaming { white-space: pre-wrap; }
 
 .msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; padding-left: 4px; }
+
+/* 实际使用的模型标签：贴在气泡下方，便于确认兜底是否生效 */
+.msg-model {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: #94a3b8; margin-top: 4px; padding-left: 4px;
+}
 
 /* 回答依据：知识库引用卡片 */
 .refs { margin-top: 8px; background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }

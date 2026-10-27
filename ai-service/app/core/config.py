@@ -1,10 +1,16 @@
 """AI 服务配置：从环境变量读取端口、模型、Redis、角色设定等参数。"""
 import os
 from dataclasses import dataclass
+from typing import List
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _split_models(raw: str) -> List[str]:
+    """把逗号分隔的模型名拆成列表，去空白与空项。"""
+    return [m.strip() for m in (raw or "").split(",") if m.strip()]
 
 
 @dataclass
@@ -19,8 +25,21 @@ class Settings:
     ai_base_url: str = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1")
     ai_api_key: str = os.getenv("AI_API_KEY", "")
     ai_model: str = os.getenv("AI_MODEL", "deepseek-chat")
+    # 云端候选模型（逗号分隔，越靠前越优先；留空则只用 ai_model 单个）
+    ai_models_raw: str = os.getenv("AI_MODELS", "")
     ai_timeout_seconds: int = int(os.getenv("AI_TIMEOUT_SECONDS", "45"))
     ai_temperature: float = float(os.getenv("AI_TEMPERATURE", "0.3"))
+
+    # ===== 本地 Ollama 兜底（走 OpenAI 兼容的 /v1 端点，与云端同一套调用代码）=====
+    # 注意：不能用 OLLAMA_MODELS —— 那是 Ollama 官方的「模型文件存放目录」变量，
+    # 本机已存在该变量（如 D:\develop\ollama\ollama_models），会与「候选模型列表」混淆。
+    ollama_enabled: bool = os.getenv("OLLAMA_CHAT_ENABLED", "true").lower() == "true"
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    ollama_api_key: str = os.getenv("OLLAMA_API_KEY", "ollama")
+    # Ollama 候选模型（逗号分隔，越靠前越优先；前一个失败自动换下一个）
+    ollama_models_raw: str = os.getenv("OLLAMA_CHAT_MODELS", "qwen2.5-coder:7b,deepseek-r1:1.5b")
+    ollama_timeout_seconds: int = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+    ollama_temperature: float = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
 
     # ===== AI 角色设定（决定系统提示词里的人设，改这里就能换人设，不用改代码）=====
     assistant_name: str = os.getenv("AI_ASSISTANT_NAME", "小智")
@@ -47,6 +66,16 @@ class Settings:
     # ===== 会话保留策略 =====
     session_ttl_seconds: int = int(os.getenv("SESSION_TTL_SECONDS", "604800"))
     session_max_messages: int = int(os.getenv("SESSION_MAX_MESSAGES", "100"))
+
+    @property
+    def ai_model_list(self) -> List[str]:
+        """云端候选模型：AI_MODELS 优先，未配置时退回单个 AI_MODEL。"""
+        return _split_models(self.ai_models_raw) or [self.ai_model]
+
+    @property
+    def ollama_model_list(self) -> List[str]:
+        """Ollama 候选模型列表，按顺序尝试。"""
+        return _split_models(self.ollama_models_raw)
 
 
 settings = Settings()

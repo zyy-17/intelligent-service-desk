@@ -28,11 +28,17 @@ def recent_history(session_id: Optional[str], user_id: Optional[int], limit: Opt
         return []
 
 
-def record_turn(req: ChatRequest, question: str, answer: str) -> Optional[str]:
-    """把一轮问答写入会话（会话不存在时自动新建），返回会话 ID。"""
+def record_turn(req: ChatRequest, question: str, answer: str,
+                references: Optional[List[dict]] = None,
+                grounded: Optional[bool] = None,
+                source: Optional[str] = None,
+                model: Optional[str] = None) -> Optional[str]:
+    """把一轮问答写入会话（会话不存在时自动新建），附带引用信息供历史回显，返回会话 ID。"""
     if not req.user_id:
         return None
     try:
+        # 引用随助手消息一起落库，重新打开会话时前端才能还原「回答依据」卡片
+        extra = {"references": references, "grounded": grounded, "source": source, "model": model}
         sid = req.session_id
         appended = False
         if sid:
@@ -46,7 +52,7 @@ def record_turn(req: ChatRequest, question: str, answer: str) -> Optional[str]:
         if not appended:
             logger.warning("会话 %s 写入用户消息失败", sid)
         store.rename_if_first(sid, req.user_id)
-        store.append_message(sid, req.user_id, "assistant", answer)
+        store.append_message(sid, req.user_id, "assistant", answer, extra)
         return sid
     except Exception as e:
         logger.warning("会话写入失败：%s", e)

@@ -3,6 +3,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from .chat import KnowledgeReference
+
 
 class SessionCreateRequest(BaseModel):
     """会话创建请求。"""
@@ -11,10 +13,14 @@ class SessionCreateRequest(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    """会话消息。"""
+    """会话消息（助手消息带当轮引用的知识文章，重新打开会话时可还原依据）。"""
     role: str
     content: str
     ts: Optional[float] = None
+    references: List[KnowledgeReference] = Field(default_factory=list, description="该轮回答引用的知识文章")
+    grounded: Optional[bool] = Field(None, description="该轮回答是否有可靠知识依据")
+    source: Optional[str] = Field(None, description="该轮回答的来源标签")
+    model: Optional[str] = Field(None, description="该轮回答实际使用的模型")
 
 
 class SessionDetail(BaseModel):
