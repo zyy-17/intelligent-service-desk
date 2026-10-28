@@ -72,16 +72,23 @@ public class TicketService {
             args.add("%" + keyword + "%");
             args.add("%" + keyword + "%");
         }
+        // 待审核工单需要带出申请人，供主管/管理员在列表内直接审核
         String base = " FROM ticket t LEFT JOIN sys_user cu ON cu.id = t.customer_id " +
                 "LEFT JOIN sys_user au ON au.id = t.assignee_id " +
-                "LEFT JOIN ticket_category c ON c.id = t.category_id ";
+                "LEFT JOIN ticket_category c ON c.id = t.category_id " +
+                "LEFT JOIN (SELECT h.ticket_id, h.operator_id, h.created_at, " +
+                "           ROW_NUMBER() OVER (PARTITION BY h.ticket_id ORDER BY h.id DESC) rn " +
+                "           FROM ticket_history h WHERE h.action = 'APPLY') ap1 " +
+                "       ON ap1.ticket_id = t.id AND ap1.rn = 1 " +
+                "LEFT JOIN sys_user ap ON ap.id = ap1.operator_id ";
         Long total = jdbc.queryForObject("SELECT COUNT(*)" + base + where, Long.class, args.toArray());
         args.add(size);
         args.add((p - 1) * size);
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT t.*, cu.display_name AS customer_name, au.display_name AS assignee_name, " +
-                        "c.name AS category_name, c.color AS category_color" + base + where +
-                        " ORDER BY t.created_at DESC LIMIT ? OFFSET ?", args.toArray());
+                        "c.name AS category_name, c.color AS category_color, " +
+                        "ap.id AS applicant_id, ap.display_name AS applicant_name, ap1.created_at AS apply_at" +
+                        base + where + " ORDER BY t.created_at DESC LIMIT ? OFFSET ?", args.toArray());
         return PageResult.of(rows, total, p, size);
     }
 
@@ -145,8 +152,12 @@ public class TicketService {
         jdbc.update("UPDATE ticket SET status = 'PENDING_REVIEW' WHERE id = ?", ticketId);
         historyRepository.save(history(ticketId, u.id(), "APPLY", "PENDING", "PENDING_REVIEW", "申请负责处理该工单"));
         for (Long uid : reviewerIds()) {
-            addNotification(uid, "工单申请待审核", "客服「" + u.displayName() + "」申请处理工单，请审核", ticketId);
+            addNotification(uid, "REVIEW", "工单申请待审核",
+                    "客服「" + u.displayName() + "」申请处理工单 " + t.getTicketNo() + "「" + t.getTitle() + "」，请审核", ticketId);
         }
+        // 申请人自己也留一条待审核提醒，便于在通知中心跟踪自己申请的进度
+        addNotification(u.id(), "REVIEW_APPLIED", "申请已提交，等待审核",
+                "您已申请处理工单 " + t.getTicketNo() + "「" + t.getTitle() + "」，等待主管或管理员审核", ticketId);
     }
 
     /** 主管/管理员审核接单申请：通过则工单归申请人，驳回则退回待分配 */
@@ -170,12 +181,34 @@ public class TicketService {
         if (approve) {
             ticketRepository.updateStatusAndAssignee(ticketId, "ASSIGNED", applicantId);
             historyRepository.save(history(ticketId, u.id(), "REVIEW", "PENDING_REVIEW", "ASSIGNED", "审核通过，工单分配给申请人" + note));
-            addNotification(applicantId, "工单申请已通过", "您申请的工单已分配给您，请及时处理", ticketId);
+            addNotification(applicantId, "ASSIGN", "新指派工单",
+                    "工单 " + t.getTicketNo() + "「" + t.getTitle() + "」已分配给您，请及时处理", ticketId);
         } else {
             jdbc.update("UPDATE ticket SET status = 'PENDING' WHERE id = ?", ticketId);
             historyRepository.save(history(ticketId, u.id(), "REVIEW", "PENDING_REVIEW", "PENDING", "审核驳回" + note));
-            addNotification(applicantId, "工单申请被驳回", "您的工单申请未通过" + note, ticketId);
+            addNotification(applicantId, "REVIEW_RESULT", "工单申请被驳回",
+                    "您申请处理的工单 " + t.getTicketNo() + "「" + t.getTitle() + "」未通过" + note, ticketId);
         }
+        // 同一条待审核通知发给了多个审核人：已处理的那几位要把通知置为已读并改写文案，避免重复审核
+        // 兼容历史数据：早期待审核通知的 type 还是 TICKET，按标题一起处理
+        jdbc.update("UPDATE notification SET is_read = 1, title = ?, content = ? " +
+                        "WHERE ticket_id = ? AND (type = 'REVIEW' OR title = '工单申请待审核') " +
+                        "AND recipient_id <> ? AND is_read = 0",
+                "工单申请已处理",
+                "工单 " + t.getTicketNo() + " 已由「" + u.displayName() + "」" + (approve ? "审核通过" : "驳回"),
+                ticketId, u.id());
+        // 申请人那条「等待审核」提醒随之置为已读（结果由「新指派 / 申请被驳回」通知承载）
+        jdbc.update("UPDATE notification SET is_read = 1 WHERE ticket_id = ? AND type = 'REVIEW_APPLIED' AND is_read = 0", ticketId);
+    }
+
+    /** 待审核工单数量（仅主管/管理员使用，用于工单管理页与导航提示） */
+    public long pendingReviewCount() {
+        AuthContext.UserInfo me = AuthContext.require();
+        if (!"ADMIN".equals(me.role()) && !"SUPERVISOR".equals(me.role())) {
+            return 0;
+        }
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM ticket WHERE status = 'PENDING_REVIEW'", Long.class);
+        return count == null ? 0 : count;
     }
 
     /**
@@ -545,9 +578,14 @@ public class TicketService {
 
     /** 给指定用户发站内通知（失败忽略） */
     private void addNotification(Long recipientId, String title, String content, Long ticketId) {
+        addNotification(recipientId, "TICKET", title, content, ticketId);
+    }
+
+    /** 给指定用户发带类型的站内通知（REVIEW 待审核 / ASSIGN 新指派 / REVIEW_RESULT 审核结果） */
+    private void addNotification(Long recipientId, String type, String title, String content, Long ticketId) {
         try {
             jdbc.update("INSERT INTO notification(recipient_id,type,title,content,ticket_id,is_read,created_at) VALUES(?,?,?,?,?,0,?)",
-                    recipientId, "TICKET", title, content, ticketId, LocalDateTime.now());
+                    recipientId, type, title, content, ticketId, LocalDateTime.now());
         } catch (Exception ignored) {
         }
     }

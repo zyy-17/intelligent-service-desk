@@ -35,6 +35,13 @@ public class TicketController {
         return ApiResponse.ok(ticketService.list(page, pageSize, status, keyword));
     }
 
+    /** 待审核工单数量（工单管理页按钮角标，仅主管/管理员有值） */
+    @GetMapping("/pending-review/count")
+    @RequireRole({"ADMIN", "SUPERVISOR"})
+    public ApiResponse<Long> pendingReviewCount() {
+        return ApiResponse.ok(ticketService.pendingReviewCount());
+    }
+
     /** 工单详情 */
     @GetMapping("/{id}")
     public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {

@@ -109,13 +109,30 @@
       </main>
     </div>
 
-    <!-- 通知抽屉 -->
-    <el-drawer v-model="notifyVisible" title="通知中心" size="360px">
+    <!-- 通知抽屉：点击条目跳工单详情（待审核由详情页的审核条处理） -->
+    <el-drawer v-model="notifyVisible" size="380px">
+      <template #header>
+        <div class="notify-head">
+          <span class="notify-head-title">通知中心</span>
+          <el-button v-if="hasUnread" link size="small" @click="markAllRead">全部已读</el-button>
+        </div>
+      </template>
       <div v-if="notifications.length === 0" class="empty">暂无通知</div>
-      <div v-for="n in notifications" :key="n.id" class="notify-item" :class="{ unread: n.isRead === 0 }">
-        <div class="notify-title">{{ n.title }}</div>
+      <div v-for="n in notifications" :key="n.id" class="notify-item"
+           :class="{ unread: n.isRead === 0, clickable: !!n.ticketId }" @click="openNotification(n)">
+        <div class="notify-top">
+          <el-tag size="small" effect="light" :type="notifyTagType(n.type)">{{ notifyTypeLabel(n.type) }}</el-tag>
+          <span class="notify-time">{{ formatTime(n.createdAt) }}</span>
+        </div>
+        <div class="notify-title">
+          <span v-if="n.isRead === 0" class="unread-dot"></span>{{ n.title }}
+        </div>
         <div class="notify-content">{{ n.content }}</div>
-        <div class="notify-time">{{ formatTime(n.createdAt) }}</div>
+        <div v-if="n.ticketNo" class="notify-ticket">
+          <span class="tk-no">{{ n.ticketNo }}</span>
+          <span v-if="n.ticketTitle" class="tk-title">· {{ n.ticketTitle }}</span>
+          <span class="tk-go">查看详情 →</span>
+        </div>
       </div>
     </el-drawer>
   </div>
@@ -236,6 +253,20 @@ function onUserCommand(command) {
 const unread = ref(0)
 const notifications = ref([])
 const notifyVisible = ref(false)
+const hasUnread = computed(() => notifications.value.some(n => n.isRead === 0))
+let notifyTimer = null
+
+// 通知类型标签：待审核 / 新指派 / 审核结果 / 工单 / 系统
+const NOTIFY_TYPES = {
+  REVIEW: { label: '待审核', type: 'warning' },
+  REVIEW_APPLIED: { label: '待审核', type: 'warning' },
+  ASSIGN: { label: '新指派', type: 'primary' },
+  REVIEW_RESULT: { label: '审核结果', type: 'info' },
+  TICKET: { label: '工单', type: 'info' },
+  SYSTEM: { label: '系统', type: 'info' }
+}
+const notifyTypeLabel = t => (NOTIFY_TYPES[t] || NOTIFY_TYPES.TICKET).label
+const notifyTagType = t => (NOTIFY_TYPES[t] || NOTIFY_TYPES.TICKET).type
 
 async function loadUnread() {
   try {
@@ -249,16 +280,40 @@ async function showNotifications() {
   notifications.value = data.list || []
 }
 
+/* 点击通知：先标记已读，再跳到工单详情（主管/管理员可在详情页直接同意分配或驳回） */
+async function openNotification(n) {
+  if (n.isRead === 0) {
+    try {
+      await api.post(`/notifications/${n.id}/read`)
+      n.isRead = 1
+      loadUnread()
+    } catch (e) { /* 标记失败不阻塞跳转 */ }
+  }
+  if (!n.ticketId) return
+  notifyVisible.value = false
+  router.push(`/tickets/${n.ticketId}`)
+}
+
+/* 全部标记已读 */
+async function markAllRead() {
+  await api.post('/notifications/read-all')
+  notifications.value.forEach(n => { n.isRead = 1 })
+  unread.value = 0
+}
+
 function formatTime(t) {
   return t ? t.replace('T', ' ').substring(0, 16) : ''
 }
 
 onMounted(() => {
   loadUnread()
+  // 30 秒轮询未读数：客服申请后主管/管理员无需手动刷新就能看到待审核提醒
+  notifyTimer = setInterval(loadUnread, 30000)
   document.addEventListener('click', onDocClick)
   document.addEventListener('keydown', onKeydown)
 })
 onBeforeUnmount(() => {
+  if (notifyTimer) clearInterval(notifyTimer)
   document.removeEventListener('click', onDocClick)
   document.removeEventListener('keydown', onKeydown)
 })
@@ -534,28 +589,55 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+.notify-head { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.notify-head-title { font-size: 16px; font-weight: 600; }
 .notify-item {
   padding: 12px;
   border-radius: 8px;
   margin-bottom: 8px;
   background: #f9fafb;
+  border: 1px solid transparent;
+  transition: border-color .16s, background .16s, box-shadow .16s;
 }
 .notify-item.unread {
   background: #eef2ff;
 }
+.notify-item.clickable { cursor: pointer; }
+.notify-item.clickable:hover {
+  background: #e8eeff;
+  border-color: #c7d2fe;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, .08);
+}
+.notify-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .notify-title {
   font-weight: 600;
   font-size: 14px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); flex: 0 0 auto; }
 .notify-content {
   color: var(--text-sub);
   font-size: 13px;
   margin-top: 4px;
+  line-height: 1.6;
 }
+.notify-ticket {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.notify-ticket .tk-no { color: var(--primary); font-family: Consolas, Monaco, monospace; }
+.notify-ticket .tk-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.notify-ticket .tk-go { margin-left: auto; color: var(--primary); }
 .notify-time {
   color: var(--text-muted);
   font-size: 12px;
-  margin-top: 6px;
 }
 .empty {
   text-align: center;

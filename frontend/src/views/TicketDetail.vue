@@ -34,7 +34,7 @@
         <span class="rb-time" v-if="applyTime">（{{ fmtShort(applyTime) }}）</span>
       </span>
       <div class="rb-actions" v-if="isReviewer">
-        <el-button size="small" type="success" @click="doReview(true)">通过</el-button>
+        <el-button size="small" type="success" @click="doReview(true)">同意分配</el-button>
         <el-button size="small" type="danger" plain @click="doReview(false)">驳回</el-button>
       </div>
     </div>

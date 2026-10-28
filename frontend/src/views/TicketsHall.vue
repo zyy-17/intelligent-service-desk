@@ -69,9 +69,9 @@
               <el-tag v-else-if="row.status === 'PENDING_REVIEW'" size="small" :type="row.applicant_id === me.id ? 'warning' : 'info'" effect="plain">
                 {{ row.applicant_id === me.id ? '审核中' : '他人申请中' }}
               </el-tag>
-              <!-- 主管/管理员：待审核可直接通过或驳回 -->
+              <!-- 主管/管理员：待审核可直接同意分配或驳回 -->
               <template v-if="row.status === 'PENDING_REVIEW' && isReviewer">
-                <el-button type="success" size="small" @click="doReview(row, true)">通过</el-button>
+                <el-button type="success" size="small" @click="doReview(row, true)">同意分配</el-button>
                 <el-button type="danger" size="small" plain @click="doReview(row, false)">驳回</el-button>
               </template>
               <!-- 所有行都能查看只读详情（弹窗形式，不跳离大厅） -->
