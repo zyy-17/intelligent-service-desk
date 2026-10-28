@@ -64,6 +64,32 @@ public class AdminController {
         return ApiResponse.ok();
     }
 
+    /** 新建用户（未填密码时使用默认密码 123456） */
+    @PostMapping("/users")
+    @RequireRole({"ADMIN"})
+    public ApiResponse<Map<String, Object>> createUser(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(adminService.createUser(body));
+    }
+
+    /** 编辑用户资料（姓名、手机号、邮箱、部门、公司） */
+    @PutMapping("/users/{id}")
+    public ApiResponse<Void> updateUser(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        adminService.updateUser(id, body);
+        return ApiResponse.ok();
+    }
+
+    /** 批量启用/禁用用户 */
+    @PostMapping("/users/batch-status")
+    public ApiResponse<Map<String, Object>> batchStatus(@RequestBody Map<String, Object> body) {
+        Object raw = body.get("ids");
+        if (!(raw instanceof List<?> rawList) || rawList.isEmpty()) {
+            throw new com.zyyqq.desk.common.BizException("请先选择用户");
+        }
+        List<Long> ids = rawList.stream().map(v -> Long.valueOf(String.valueOf(v))).toList();
+        int status = Integer.parseInt(String.valueOf(body.getOrDefault("status", 1)));
+        return ApiResponse.ok(adminService.batchUpdateStatus(ids, status));
+    }
+
     /** 操作审计日志分页 */
     @GetMapping("/logs")
     public ApiResponse<PageResult<OperationLog>> logs(@RequestParam(defaultValue = "1") int page,

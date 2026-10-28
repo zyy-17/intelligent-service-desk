@@ -24,22 +24,142 @@ public class AdminService {
     private final OperationLogRepository logRepository;
     private final JdbcTemplate jdbc;
 
+    /** 用户列表查询字段（含头像底色与所属公司，供管理页展示） */
+    private static final String USER_SELECT =
+            "SELECT id, username, display_name, role, phone, email, department, company, avatar_color, " +
+                    "status, last_login_at, created_at FROM sys_user";
+
+    /** 新建用户未填密码时使用的默认密码 */
+    private static final String DEFAULT_PASSWORD = "123456";
+
+    /** 各角色头像底色，保证同角色用户视觉统一 */
+    private static final Map<String, String> AVATAR_COLORS = Map.of(
+            "ADMIN", "#6366f1",
+            "SUPERVISOR", "#8b5cf6",
+            "AGENT", "#3b82f6",
+            "CUSTOMER", "#06b6d4"
+    );
+
     public AdminService(UserRepository userRepository, OperationLogRepository logRepository, JdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.logRepository = logRepository;
         this.jdbc = jdbc;
     }
 
-    /** 按角色查询用户列表 */
+    /** 按角色查询用户列表（不传角色则按 ID 升序返回全部） */
     public List<Map<String, Object>> users(String role) {
         if (role != null && !role.isBlank()) {
-            return jdbc.queryForList(
-                    "SELECT id, username, display_name, role, phone, email, department, status, last_login_at, created_at " +
-                            "FROM sys_user WHERE role = ? ORDER BY id", role);
+            return jdbc.queryForList(USER_SELECT + " WHERE role = ? ORDER BY id", role);
         }
-        return jdbc.queryForList(
-                "SELECT id, username, display_name, role, phone, email, department, status, last_login_at, created_at " +
-                        "FROM sys_user ORDER BY role, id");
+        return jdbc.queryForList(USER_SELECT + " ORDER BY id");
+    }
+
+    /** 管理员创建用户：账号唯一校验，未指定密码时用默认密码 123456 */
+    @Transactional
+    public Map<String, Object> createUser(Map<String, Object> body) {
+        AuthContext.UserInfo u = AuthContext.require();
+        String username = text(body.get("username"));
+        if (username.length() < 3 || username.length() > 32) {
+            throw new BizException("账号长度需 3~32 位");
+        }
+        if (!username.matches("[A-Za-z0-9_]+")) {
+            throw new BizException("账号只能包含字母、数字和下划线");
+        }
+        if (userRepository.findByUsername(username).isPresent()) {
+            throw new BizException(409, "账号已存在");
+        }
+        // 角色白名单：管理员只能在后台分配，不接受任意字符串
+        String role = text(body.get("role")).toUpperCase();
+        if (!List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER").contains(role)) {
+            throw new BizException("角色不合法");
+        }
+        String password = text(body.get("password"));
+        if (password.isEmpty()) {
+            password = DEFAULT_PASSWORD;
+        }
+        if (password.length() < 6) {
+            throw new BizException("密码至少 6 位");
+        }
+        String displayName = text(body.get("displayName"));
+        if (displayName.isEmpty()) {
+            displayName = username;
+        }
+
+        User user = new User();
+        user.setUsername(username);
+        user.setPasswordHash(PasswordUtil.hash(password));
+        user.setDisplayName(displayName);
+        user.setRole(role);
+        // 头像底色按角色固定，保证同角色视觉统一（前端在色块上渲染姓名首字）
+        user.setAvatarColor(AVATAR_COLORS.getOrDefault(role, "#6366f1"));
+        user.setPhone(text(body.get("phone")));
+        user.setEmail(text(body.get("email")));
+        user.setDepartment(text(body.get("department")));
+        user.setCompany(text(body.get("company")));
+        user.setStatus(1);
+        user.setCreatedAt(LocalDateTime.now());
+        User saved = userRepository.save(user);
+
+        audit(u, "CREATE_USER", "USER", String.valueOf(saved.getId()), "新建用户 " + username + "（" + role + "）");
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("id", saved.getId());
+        result.put("username", username);
+        result.put("defaultPassword", DEFAULT_PASSWORD);
+        return result;
+    }
+
+    /** 管理员编辑用户资料（只允许改资料，账号与角色走各自专用接口） */
+    @Transactional
+    public void updateUser(Long id, Map<String, Object> body) {
+        AuthContext.UserInfo u = AuthContext.require();
+        User user = userRepository.findById(id).orElseThrow(() -> BizException.notFound("用户不存在"));
+        if (body.containsKey("displayName")) {
+            String displayName = text(body.get("displayName"));
+            if (displayName.isEmpty()) {
+                throw new BizException("姓名不能为空");
+            }
+            user.setDisplayName(displayName);
+        }
+        if (body.containsKey("phone")) {
+            user.setPhone(text(body.get("phone")));
+        }
+        if (body.containsKey("email")) {
+            user.setEmail(text(body.get("email")));
+        }
+        if (body.containsKey("department")) {
+            user.setDepartment(text(body.get("department")));
+        }
+        if (body.containsKey("company")) {
+            user.setCompany(text(body.get("company")));
+        }
+        userRepository.save(user);
+        audit(u, "UPDATE_USER", "USER", String.valueOf(id), "编辑资料 " + user.getUsername());
+    }
+
+    /** 批量启用/禁用用户，跳过被操作人自己的禁用请求 */
+    @Transactional
+    public Map<String, Object> batchUpdateStatus(List<Long> ids, int status) {
+        AuthContext.UserInfo u = AuthContext.require();
+        int updated = 0;
+        int skipped = 0;
+        for (Long id : ids) {
+            if (id.equals(u.id()) && status == 0) {
+                skipped++;
+                continue;
+            }
+            updated += jdbc.update("UPDATE sys_user SET status = ? WHERE id = ?", status, id);
+        }
+        audit(u, "BATCH_USER_STATUS", "USER", ids.isEmpty() ? "-" : String.valueOf(ids.get(0)),
+                "批量" + (status == 1 ? "启用" : "禁用") + " " + updated + " 个用户");
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("updated", updated);
+        result.put("skipped", skipped);
+        return result;
+    }
+
+    /** 读取字符串参数并去除首尾空白，null 视为空串 */
+    private static String text(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     /** 更新用户启用/禁用状态 */

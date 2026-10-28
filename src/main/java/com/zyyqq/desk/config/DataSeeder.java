@@ -47,6 +47,23 @@ public class DataSeeder implements CommandLineRunner {
             "麻烦您清理浏览器缓存后重试，还不行请告诉我。"
     };
 
+    /** 补齐演示主管时使用的姓名池（既有账号为 supervisor/王主管，新补的从 supervisor1 起算） */
+    private static final String[] SUPERVISOR_NAMES = {
+            "李主管", "赵主管", "孙主管", "周主管", "吴主管", "郑主管"
+    };
+
+    /** 补齐演示客服时使用的姓名池 */
+    private static final String[] AGENT_NAMES = {
+            "张伟", "李娜", "刘强", "陈静", "杨洋", "赵敏", "孙磊", "周婷", "吴晨", "徐蕾",
+            "马超", "朱琳", "郑凯", "何静", "高远", "罗薇", "梁爽", "宋涛", "唐悦", "韩冬"
+    };
+
+    /** 补齐演示客户时使用的姓名池（前 10 位对应已有 customer1~10，新增从第 11 位起） */
+    private static final String[] CUSTOMER_NAMES = {
+            "陈先生", "林女士", "黄同学", "徐女士", "马先生", "朱小姐", "郑先生", "何女士", "高先生", "罗女士",
+            "苏先生", "蒋女士", "蔡同学", "贾女士", "丁先生", "卢女士", "郝先生", "孔女士", "崔先生", "龚女士"
+    };
+
     private final JdbcTemplate jdbc;
 
     public DataSeeder(JdbcTemplate jdbc) {
@@ -63,6 +80,7 @@ public class DataSeeder implements CommandLineRunner {
         } else {
             log.info("已存在用户数据，跳过演示数据初始化");
         }
+        ensureUsers();
         ensureKnowledge();
         ensureFavorites();
         ensureRecentTickets();
@@ -123,6 +141,43 @@ public class DataSeeder implements CommandLineRunner {
                 "INSERT INTO sys_user(username,password_hash,display_name,role,phone,department,avatar_color,status) " +
                         "VALUES(?,?,?,?,?,?,?,1)",
                 username, PasswordUtil.hash("123456"), displayName, role, phone, dept, color);
+    }
+
+    /** 补齐演示用户规模：管理员固定 1 个，主管 4、客服 18、客户 25，总数 48（幂等） */
+    private void ensureUsers() {
+        ensureRoleCount("SUPERVISOR", "supervisor", SUPERVISOR_NAMES, 4, null, "#8b5cf6");
+        ensureRoleCount("AGENT", "agent", AGENT_NAMES, 18, "客服部", "#3b82f6");
+        ensureRoleCount("CUSTOMER", "customer", CUSTOMER_NAMES, 25, null, "#06b6d4");
+    }
+
+    /** 把某一角色补到目标人数：按「前缀+序号」生成账号，已存在则跳过，重复启动不会重复插入 */
+    private void ensureRoleCount(String role, String prefix, String[] names, int target, String dept, String color) {
+        Long current = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user WHERE role = ?", Long.class, role);
+        int need = target - (current == null ? 0 : current.intValue());
+        if (need <= 0) {
+            return;
+        }
+        int inserted = 0;
+        for (int i = 1; i <= names.length && inserted < need; i++) {
+            String username = prefix + i;
+            Long exists = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user WHERE username = ?", Long.class, username);
+            if (exists != null && exists > 0) {
+                continue;
+            }
+            insertUser(username, names[i - 1], role, nextPhone(role, i), dept, color);
+            inserted++;
+        }
+        log.info("补齐 {} 用户 {} 个（目标 {} 人）", role, inserted, target);
+    }
+
+    /** 按角色生成演示手机号，避免不同角色之间重复 */
+    private String nextPhone(String role, int seq) {
+        String head = switch (role) {
+            case "SUPERVISOR" -> "1380002";
+            case "AGENT" -> "1380003";
+            default -> "1390002";
+        };
+        return head + String.format("%04d", seq);
     }
 
     /** 执行插入并返回自增主键（参数绑定交给 Spring，兼容 null 值） */
