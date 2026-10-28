@@ -213,30 +213,46 @@ public class AdminService {
         return PageResult.of(list, total, p, size);
     }
 
-    /** 查询工单分类列表 */
+    /** 查询工单分类列表（含说明与状态，供管理页展示） */
     public List<Map<String, Object>> categories() {
-        return jdbc.queryForList("SELECT id, name, color, sla_hours, sort, status FROM ticket_category ORDER BY sort");
+        return jdbc.queryForList(
+                "SELECT id, name, description, color, sla_hours, sort, status FROM ticket_category ORDER BY sort, id");
     }
 
     /** 新建或更新工单分类 */
     @Transactional
     public void saveCategory(Map<String, Object> body) {
         AuthContext.UserInfo u = AuthContext.require();
-        String name = String.valueOf(body.getOrDefault("name", ""));
+        String name = String.valueOf(body.getOrDefault("name", "")).trim();
         if (name.isBlank()) {
             throw new BizException("分类名称不能为空");
         }
         Long id = body.get("id") == null ? null : Long.valueOf(String.valueOf(body.get("id")));
-        int slaHours = Integer.parseInt(String.valueOf(body.getOrDefault("slaHours", "24")));
+        // 兼容前端两种键名：老表单提交 sla_hours，新代码用驼峰 slaHours
+        int slaHours = Integer.parseInt(firstNonNull(body, "slaHours", "sla_hours", "24"));
         String color = String.valueOf(body.getOrDefault("color", "#6366f1"));
         int sort = Integer.parseInt(String.valueOf(body.getOrDefault("sort", "0")));
+        String description = text(body.get("description"));
+        if (description.length() > 200) {
+            description = description.substring(0, 200);
+        }
         if (id == null) {
-            jdbc.update("INSERT INTO ticket_category(name,color,sla_hours,sort,status) VALUES(?,?,?,?,1)", name, color, slaHours, sort);
+            jdbc.update("INSERT INTO ticket_category(name,description,color,sla_hours,sort,status) VALUES(?,?,?,?,?,1)",
+                    name, blankToNull(description), color, slaHours, sort);
             audit(u, "CREATE_CATEGORY", "CATEGORY", name, "新建分类");
         } else {
-            jdbc.update("UPDATE ticket_category SET name=?, color=?, sla_hours=?, sort=? WHERE id=?", name, color, slaHours, sort, id);
+            jdbc.update("UPDATE ticket_category SET name=?, description=?, color=?, sla_hours=?, sort=? WHERE id=?",
+                    name, blankToNull(description), color, slaHours, sort, id);
             audit(u, "UPDATE_CATEGORY", "CATEGORY", name, "更新分类");
         }
+    }
+
+    /** 启用或停用工单分类（停用后新建工单时不再可选） */
+    @Transactional
+    public void updateCategoryStatus(Long id, int status) {
+        AuthContext.UserInfo u = AuthContext.require();
+        jdbc.update("UPDATE ticket_category SET status = ? WHERE id = ?", status, id);
+        audit(u, "UPDATE_CATEGORY_STATUS", "CATEGORY", String.valueOf(id), status == 1 ? "启用分类" : "停用分类");
     }
 
     /** 下架（软删除）工单分类 */
@@ -245,6 +261,24 @@ public class AdminService {
         AuthContext.UserInfo u = AuthContext.require();
         jdbc.update("UPDATE ticket_category SET status = 0 WHERE id = ?", id);
         audit(u, "DELETE_CATEGORY", "CATEGORY", String.valueOf(id), "下架分类");
+    }
+
+    /** 空串转 null，避免库里出现空字符串与 NULL 两种「无说明」形态 */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    /** 按顺序取第一个存在的键值，取不到时返回默认值 */
+    private static String firstNonNull(Map<String, Object> body, String keyA, String keyB, String fallback) {
+        Object a = body.get(keyA);
+        if (a != null && !String.valueOf(a).isBlank()) {
+            return String.valueOf(a);
+        }
+        Object b = body.get(keyB);
+        if (b != null && !String.valueOf(b).isBlank()) {
+            return String.valueOf(b);
+        }
+        return fallback;
     }
 
     /** 写入操作审计日志（失败不影响主流程） */

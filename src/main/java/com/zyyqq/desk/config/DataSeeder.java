@@ -64,6 +64,18 @@ public class DataSeeder implements CommandLineRunner {
             "苏先生", "蒋女士", "蔡同学", "贾女士", "丁先生", "卢女士", "郝先生", "孔女士", "崔先生", "龚女士"
     };
 
+    /** 内置分类的说明文案（分类列表里显示在名称下方，也参与搜索） */
+    private static final Map<String, String> CATEGORY_DESC = new LinkedHashMap<>();
+
+    static {
+        CATEGORY_DESC.put("账户问题", "账号登录、密码找回、权限问题");
+        CATEGORY_DESC.put("产品咨询", "产品功能、版本、使用方法");
+        CATEGORY_DESC.put("技术故障", "系统报错、功能异常、性能问题");
+        CATEGORY_DESC.put("账单与支付", "费用、发票、支付问题");
+        CATEGORY_DESC.put("意见建议", "功能建议、使用反馈");
+        CATEGORY_DESC.put("其他", "其他未分类问题");
+    }
+
     private final JdbcTemplate jdbc;
 
     public DataSeeder(JdbcTemplate jdbc) {
@@ -81,6 +93,7 @@ public class DataSeeder implements CommandLineRunner {
             log.info("已存在用户数据，跳过演示数据初始化");
         }
         ensureUsers();
+        ensureCategoryDesc();
         ensureKnowledge();
         ensureFavorites();
         ensureRecentTickets();
@@ -168,6 +181,19 @@ public class DataSeeder implements CommandLineRunner {
             inserted++;
         }
         log.info("补齐 {} 用户 {} 个（目标 {} 人）", role, inserted, target);
+    }
+
+    /** 给内置分类补齐说明文案：只填空值，不覆盖管理员自己改过的说明 */
+    private void ensureCategoryDesc() {
+        int filled = 0;
+        for (Map.Entry<String, String> entry : CATEGORY_DESC.entrySet()) {
+            filled += jdbc.update(
+                    "UPDATE ticket_category SET description = ? WHERE name = ? AND (description IS NULL OR description = '')",
+                    entry.getValue(), entry.getKey());
+        }
+        if (filled > 0) {
+            log.info("已为 {} 个内置分类补充说明文案", filled);
+        }
     }
 
     /** 按角色生成演示手机号，避免不同角色之间重复 */

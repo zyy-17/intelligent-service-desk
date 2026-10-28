@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
 CREATE TABLE IF NOT EXISTS ticket_category (
     id         BIGINT      NOT NULL AUTO_INCREMENT,
     name       VARCHAR(64) NOT NULL COMMENT '分类名称',
+    description VARCHAR(200)         DEFAULT NULL COMMENT '分类说明',
     color      VARCHAR(16)          DEFAULT NULL COMMENT '图表颜色',
     sla_hours  INT                  DEFAULT 24 COMMENT '解决时限（小时）',
     sort       INT         NOT NULL DEFAULT 0,

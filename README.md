@@ -208,7 +208,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 ⚙️ 系统管理
    ├─ 用户管理        角色分布看板、新增/编辑用户、角色分配、批量启停、密码重置
-   ├─ 工单分类        增删改
+   ├─ 工单分类        分类说明与图标配色、按名称/说明检索、启停、上下移动排序
    └─ 审计日志        敏感操作留痕
 ```
 
@@ -491,8 +491,9 @@ intelligent-service-desk/
 | PUT    | `/users/{id}/password` | 重置密码        |
 | POST   | `/users/batch-status` | 批量启用/禁用    |
 | GET    | `/logs`             | 审计日志           |
-| GET    | `/categories`       | 工单分类列表       |
+| GET    | `/categories`       | 工单分类列表（含说明、状态） |
 | POST   | `/categories`       | 新增分类           |
+| PUT    | `/categories/{id}/status` | 启用/停用分类 |
 | DELETE | `/categories/{id}`  | 删除分类           |
 
 ### AI 服务接口（FastAPI `localhost:8000`）

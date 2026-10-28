@@ -115,30 +115,81 @@
 
       <!-- 工单分类 -->
       <el-tab-pane label="工单分类" name="categories">
-        <div class="toolbar panel-card cat-toolbar">
-          <el-button type="primary" :icon="Plus" @click="openCatEdit()">新建分类</el-button>
-        </div>
-        <div class="panel-card table-panel">
-          <el-table :data="categories" stripe style="width: 100%">
-            <el-table-column prop="name" label="分类名称" width="160">
+        <div class="panel-card cat-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <el-button type="primary" :icon="Plus" @click="openCatEdit()">新建分类</el-button>
+            </div>
+            <div class="toolbar-right">
+              <el-input v-model="catQuery.keyword" placeholder="输入分类名称 / 说明关键词"
+                        :prefix-icon="Search" clearable style="width: 220px" />
+              <el-select v-model="catQuery.status" placeholder="状态：全部" clearable style="width: 128px">
+                <el-option label="启用" :value="1" />
+                <el-option label="停用" :value="0" />
+              </el-select>
+              <el-select v-model="catQuery.sort" style="width: 136px">
+                <el-option label="默认排序" value="default" />
+                <el-option label="SLA 从短到长" value="slaAsc" />
+                <el-option label="SLA 从长到短" value="slaDesc" />
+                <el-option label="按名称排列" value="name" />
+              </el-select>
+              <el-button :icon="Refresh" @click="loadCategories">刷新</el-button>
+            </div>
+          </div>
+
+          <el-table :data="pagedCategories" v-loading="loadingCategories" row-key="id" style="width: 100%">
+            <el-table-column label="分类名称" min-width="280">
               <template #default="{ row }">
-                <span class="cat-dot" :style="{ background: row.color }"></span>{{ row.name }}
+                <div class="cat-name">
+                  <span class="cat-icon" :style="{ background: row.color || '#6366f1' }">
+                    <el-icon :size="15"><component :is="catIcon(row)" /></el-icon>
+                  </span>
+                  <div class="cat-text">
+                    <div class="cat-title">{{ row.name }}</div>
+                    <div class="cat-desc">{{ row.description || '暂无说明' }}</div>
+                  </div>
+                </div>
               </template>
             </el-table-column>
-            <el-table-column prop="sla_hours" label="SLA 时限(小时)" width="140" />
-            <el-table-column prop="sort" label="排序" width="100" />
-            <el-table-column prop="status" label="状态" width="100">
+            <el-table-column prop="sla_hours" label="SLA 时限(小时)" width="150" align="center" />
+            <el-table-column prop="sort" label="排序" width="110" align="center" />
+            <el-table-column label="状态" width="110">
               <template #default="{ row }">
-                <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">{{ row.status === 1 ? '启用' : '停用' }}</el-tag>
+                <span class="status-text" :class="{ 'is-off': row.status !== 1 }">
+                  <i class="status-dot"></i>{{ row.status === 1 ? '启用' : '停用' }}
+                </span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="160">
+            <el-table-column label="操作" width="196">
               <template #default="{ row }">
-                <el-button size="small" @click="openCatEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" @click="deleteCat(row)">停用</el-button>
+                <div class="row-actions">
+                  <el-button link type="primary" size="small" :icon="Edit" @click="openCatEdit(row)">编辑</el-button>
+                  <el-button link :type="row.status === 1 ? 'info' : 'success'" size="small"
+                             @click="toggleCatStatus(row)">
+                    {{ row.status === 1 ? '停用' : '启用' }}
+                  </el-button>
+                  <el-dropdown trigger="click" @command="dir => moveCategory(row, dir)">
+                    <el-button link size="small" :icon="MoreFilled" class="more-btn" />
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="-1">上移一位</el-dropdown-item>
+                        <el-dropdown-item command="1">下移一位</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
               </template>
             </el-table-column>
           </el-table>
+
+          <div class="pager">
+            <span class="pager-total">共 {{ filteredCategories.length }} 条</span>
+            <el-pagination background layout="prev, pager, next, sizes, jumper"
+                           :total="filteredCategories.length" :page-size="catPageSize"
+                           :current-page="catPage" :page-sizes="[10, 20, 50]"
+                           @current-change="p => catPage = p"
+                           @size-change="s => { catPageSize = s; catPage = 1 }" />
+          </div>
         </div>
       </el-tab-pane>
 
@@ -225,20 +276,30 @@
     </el-dialog>
 
     <!-- 分类编辑 -->
-    <el-dialog v-model="catVisible" :title="catForm.id ? '编辑分类' : '新建分类'" width="420px">
+    <el-dialog v-model="catVisible" :title="catForm.id ? '编辑分类' : '新建分类'" width="480px">
       <el-form :model="catForm" label-width="90px">
-        <el-form-item label="名称" required><el-input v-model="catForm.name" /></el-form-item>
-        <el-form-item label="SLA 时限">
-          <el-input-number v-model="catForm.sla_hours" :min="1" :max="720" />
+        <el-form-item label="名称" required>
+          <el-input v-model="catForm.name" placeholder="如：账户问题" />
         </el-form-item>
-        <el-form-item label="排序"><el-input-number v-model="catForm.sort" :min="0" /></el-form-item>
-        <el-form-item label="颜色">
+        <el-form-item label="说明">
+          <el-input v-model="catForm.description" type="textarea" :rows="2" maxlength="200" show-word-limit
+                    placeholder="一句话说明这类工单涵盖什么，会显示在分类名称下方" />
+        </el-form-item>
+        <el-form-item label="SLA 时限">
+          <el-input-number v-model="catForm.slaHours" :min="1" :max="720" />
+          <span class="form-hint">小时</span>
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="catForm.sort" :min="0" />
+          <span class="form-hint">数字越小越靠前</span>
+        </el-form-item>
+        <el-form-item label="图标颜色">
           <el-color-picker v-model="catForm.color" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="catVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveCat">保存</el-button>
+        <el-button type="primary" :loading="savingCat" @click="saveCat">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -248,8 +309,9 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Refresh, MoreFilled,
-  UserFilled, Medal, Avatar, Headset, User
+  Plus, Search, Refresh, MoreFilled, Edit,
+  UserFilled, Medal, Avatar, Headset, User,
+  Promotion, Setting, Money, ChatDotRound, Warning, Collection
 } from '@element-plus/icons-vue'
 import api from '../api'
 
@@ -257,6 +319,7 @@ const activeTab = ref('users')
 const users = ref([])
 const loadingUsers = ref(false)
 const categories = ref([])
+const loadingCategories = ref(false)
 const logs = ref([])
 const loadingLogs = ref(false)
 const logPage = ref(1)
@@ -272,6 +335,11 @@ const userPage = ref(1)
 const userPageSize = ref(10)
 const selectedIds = ref([])
 
+// 分类列表的筛选与分页
+const catQuery = reactive({ keyword: '', status: '', sort: 'default' })
+const catPage = ref(1)
+const catPageSize = ref(10)
+
 const userVisible = ref(false)
 const savingUser = ref(false)
 const userForm = reactive({
@@ -280,7 +348,8 @@ const userForm = reactive({
 })
 
 const catVisible = ref(false)
-const catForm = reactive({ id: null, name: '', sla_hours: 24, sort: 0, color: '#6366f1' })
+const savingCat = ref(false)
+const catForm = reactive({ id: null, name: '', description: '', slaHours: 24, sort: 0, color: '#6366f1' })
 
 /** 角色元数据：文案、图标与配色，表格标签和统计卡共用 */
 const ROLES = [
@@ -331,6 +400,54 @@ const pagedUsers = computed(() => {
 
 // 筛选条件变化后回到第一页
 watch(() => [userQuery.keyword, userQuery.role, userQuery.status], () => { userPage.value = 1 })
+watch(() => [catQuery.keyword, catQuery.status, catQuery.sort], () => { catPage.value = 1 })
+
+/** 分类图标：按名称匹配语义图标，自定义分类按 id 在图标池里轮换 */
+const CAT_ICONS = {
+  账户问题: User,
+  产品咨询: Promotion,
+  技术故障: Setting,
+  账单与支付: Money,
+  意见建议: ChatDotRound,
+  其他: MoreFilled
+}
+const CAT_ICON_POOL = [Collection, Warning, Avatar, Promotion, ChatDotRound, Setting]
+
+/** 取分类对应图标 */
+function catIcon(row) {
+  return CAT_ICONS[row.name] || CAT_ICON_POOL[Math.abs(Number(row.id) || 0) % CAT_ICON_POOL.length]
+}
+
+/** 按「排序」字段升序（相同则按 id），作为所有筛选的基础顺序 */
+const sortedCategories = computed(() =>
+  [...categories.value].sort((a, b) => (a.sort - b.sort) || (a.id - b.id))
+)
+
+/** 分类筛选：关键字匹配名称或说明，状态可筛 */
+const filteredCategories = computed(() => {
+  const kw = catQuery.keyword.trim().toLowerCase()
+  let list = sortedCategories.value.filter(c => {
+    if (catQuery.status === 0 || catQuery.status === 1) {
+      if (c.status !== catQuery.status) return false
+    }
+    if (!kw) return true
+    return [c.name, c.description].filter(Boolean).some(v => String(v).toLowerCase().includes(kw))
+  })
+  if (catQuery.sort === 'slaAsc') {
+    list = [...list].sort((a, b) => a.sla_hours - b.sla_hours)
+  } else if (catQuery.sort === 'slaDesc') {
+    list = [...list].sort((a, b) => b.sla_hours - a.sla_hours)
+  } else if (catQuery.sort === 'name') {
+    list = [...list].sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'))
+  }
+  return list
+})
+
+/** 当前页显示的分类 */
+const pagedCategories = computed(() => {
+  const start = (catPage.value - 1) * catPageSize.value
+  return filteredCategories.value.slice(start, start + catPageSize.value)
+})
 
 function fmtTime(t) { return t ? String(t).replace('T', ' ').substring(0, 19) : '' }
 
@@ -351,7 +468,8 @@ async function loadUsers() {
 }
 
 async function loadCategories() {
-  categories.value = await api.get('/admin/categories')
+  loadingCategories.value = true
+  try { categories.value = await api.get('/admin/categories') } finally { loadingCategories.value = false }
 }
 
 async function loadLogs(page = 1) {
@@ -488,25 +606,69 @@ async function batchStatus(status) {
 
 function openCatEdit(row) {
   if (row) {
-    Object.assign(catForm, { id: row.id, name: row.name, sla_hours: row.sla_hours, sort: row.sort, color: row.color })
+    Object.assign(catForm, {
+      id: row.id, name: row.name, description: row.description || '',
+      slaHours: row.sla_hours, sort: row.sort, color: row.color || '#6366f1'
+    })
   } else {
-    Object.assign(catForm, { id: null, name: '', sla_hours: 24, sort: 0, color: '#6366f1' })
+    // 新建时排到末尾，避免和管理员手工排好的顺序打架
+    const nextSort = categories.value.reduce((max, c) => Math.max(max, Number(c.sort) || 0), -1) + 1
+    Object.assign(catForm, {
+      id: null, name: '', description: '', slaHours: 24, sort: nextSort, color: '#6366f1'
+    })
   }
   catVisible.value = true
 }
 
+/** 保存分类：统一按后端约定的驼峰键提交 */
 async function saveCat() {
-  if (!catForm.name) { ElMessage.warning('请输入名称'); return }
-  await api.post('/admin/categories', catForm)
-  ElMessage.success('保存成功')
-  catVisible.value = false
-  loadCategories()
+  if (!catForm.name.trim()) { ElMessage.warning('请输入分类名称'); return }
+  savingCat.value = true
+  try {
+    await api.post('/admin/categories', {
+      id: catForm.id,
+      name: catForm.name.trim(),
+      description: catForm.description,
+      slaHours: catForm.slaHours,
+      sort: catForm.sort,
+      color: catForm.color
+    })
+    ElMessage.success('保存成功')
+    catVisible.value = false
+    await loadCategories()
+  } catch (e) { /* 拦截器已提示 */ } finally { savingCat.value = false }
 }
 
-async function deleteCat(row) {
-  await api.delete(`/admin/categories/${row.id}`)
-  ElMessage.success('已停用')
-  loadCategories()
+/** 启用或停用分类 */
+async function toggleCatStatus(row) {
+  const status = row.status === 1 ? 0 : 1
+  try {
+    await api.put(`/admin/categories/${row.id}/status`, { status })
+    ElMessage.success(status === 1 ? '已启用' : '已停用')
+    await loadCategories()
+  } catch (e) { /* 拦截器已提示 */ }
+}
+
+/** 上移/下移分类：交换位置后按新顺序重写 sort，只提交有变化的项 */
+async function moveCategory(row, dir) {
+  const list = [...sortedCategories.value]
+  const idx = list.findIndex(c => c.id === row.id)
+  const target = idx + Number(dir)
+  if (idx < 0 || target < 0 || target >= list.length) return
+  ;[list[idx], list[target]] = [list[target], list[idx]]
+  const tasks = []
+  list.forEach((c, i) => {
+    if (Number(c.sort) !== i) {
+      tasks.push(api.post('/admin/categories', {
+        id: c.id, name: c.name, description: c.description || '',
+        slaHours: c.sla_hours, sort: i, color: c.color
+      }))
+    }
+  })
+  if (!tasks.length) return
+  await Promise.all(tasks)
+  ElMessage.success('排序已更新')
+  await loadCategories()
 }
 
 onMounted(() => {
@@ -523,7 +685,6 @@ onMounted(() => {
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; }
 .sel-tip { font-size: 12px; color: var(--text-sub); }
 .table-panel { padding: 16px; }
-.cat-toolbar { padding: 16px; margin-bottom: 16px; }
 
 /* 用户管理：统计卡 + 表格放同一张卡里，视觉更整体 */
 .user-panel { padding: 18px 18px 8px; }
@@ -571,7 +732,25 @@ onMounted(() => {
   gap: 12px; padding: 14px 0 10px;
 }
 .pager-total { font-size: 13px; color: var(--text-sub); }
-.cat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+
+/* 工单分类：图标 + 名称 + 说明的三段式单元格 */
+.cat-panel { padding: 18px 18px 8px; }
+.cat-name { display: flex; align-items: center; gap: 12px; }
+.cat-icon {
+  width: 32px; height: 32px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.cat-text { min-width: 0; }
+.cat-title { font-size: 14px; color: var(--text-main); line-height: 1.4; }
+.cat-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 2px; }
+
+.status-text { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--success); }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+.status-text.is-off { color: var(--text-muted); }
+.status-text.is-off .status-dot { background: var(--text-muted); }
+
+.form-hint { margin-left: 8px; font-size: 12px; color: var(--text-muted); }
 
 @media (max-width: 1280px) {
   .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }

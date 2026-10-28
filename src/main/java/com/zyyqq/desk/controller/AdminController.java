@@ -123,4 +123,11 @@ public class AdminController {
         adminService.deleteCategory(id);
         return ApiResponse.ok();
     }
+
+    /** 启用/停用工单分类 */
+    @PutMapping("/categories/{id}/status")
+    public ApiResponse<Void> updateCategoryStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        adminService.updateCategoryStatus(id, Integer.parseInt(String.valueOf(body.get("status"))));
+        return ApiResponse.ok();
+    }
 }

@@ -26,6 +26,8 @@ public class MigrationRunner implements CommandLineRunner {
     public void run(String... args) {
         addColumnIfMissing("sys_user", "avatar_url",
                 "ALTER TABLE sys_user ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL COMMENT '头像文件地址'");
+        addColumnIfMissing("ticket_category", "description",
+                "ALTER TABLE ticket_category ADD COLUMN description VARCHAR(200) DEFAULT NULL COMMENT '分类说明' AFTER name");
     }
 
     /** 列不存在时执行 DDL 补齐 */
