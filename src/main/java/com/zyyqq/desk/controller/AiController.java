@@ -28,6 +28,7 @@ public class AiController {
         AuthContext.UserInfo u = AuthContext.require();
         body.put("user_id", u.id());
         body.put("user_role", u.role());
+        body.put("user_name", u.displayName());
         return ApiResponse.ok(aiService.chat(body));
     }
 
@@ -44,6 +45,7 @@ public class AiController {
         AuthContext.UserInfo u = AuthContext.require();
         body.put("user_id", u.id());
         body.put("user_role", u.role());
+        body.put("user_name", u.displayName());
         SseEmitter emitter = new SseEmitter(120_000L);
         new Thread(() -> {
             try {
@@ -86,19 +88,28 @@ public class AiController {
     /** 工单摘要 */
     @PostMapping("/summarize")
     public ApiResponse<Object> summarize(@RequestBody Map<String, Object> body) {
-        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/summarize", body));
+        return ApiResponse.ok(aiService.summarize(withUser(body)));
     }
 
     /** 分类推荐 */
     @PostMapping("/classify")
     public ApiResponse<Object> classify(@RequestBody Map<String, Object> body) {
-        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/classify", body));
+        return ApiResponse.ok(aiService.classify(withUser(body)));
     }
 
     /** 回复草稿 */
     @PostMapping("/draft")
     public ApiResponse<Object> draft(@RequestBody Map<String, Object> body) {
-        return ApiResponse.ok(aiService.proxy("POST", "/api/ai/draft", body));
+        return ApiResponse.ok(aiService.draft(withUser(body)));
+    }
+
+    /** 给请求体补上当前登录用户，供 AI 日志记录发起人 */
+    private Map<String, Object> withUser(Map<String, Object> body) {
+        AuthContext.UserInfo u = AuthContext.require();
+        body.put("user_id", u.id());
+        body.put("user_role", u.role());
+        body.put("user_name", u.displayName());
+        return body;
     }
 
     /** 工单处置建议：按工单内容生成 2-3 步操作建议，仅客服侧可用 */

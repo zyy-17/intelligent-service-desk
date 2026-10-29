@@ -34,7 +34,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 - 📚 **知识库管理**：文章分类、编辑、审核、发布、热门排行、全文检索，支持**收藏**与按收藏量/浏览量/发布时间排序
 - 🤖 **AI 智能问答**：云端大模型（OpenAI 兼容）RAG + 知识库检索降级，支持多轮会话上下文
 - 📊 **数据统计**：状态 / 优先级 / 满意度分布、客服工作量、趋势图、客户评价统计与明细
-- ⚙️ **系统管理**：用户角色、工单分类、操作日志（全量审计 + 多维筛选 + CSV 导出）
+- ⚙️ **系统管理**：用户角色、工单分类、操作日志（全量审计 + 多维筛选 + CSV 导出）、AI 调用日志
 - ⏰ **演示定时任务**：可配置每天自动生成工单并模拟客服处理（默认关闭）
 - 🛡️ **安全防护**：JWT 认证、接口级 + 资源级权限校验、PBKDF2 密码哈希、内部备注隔离、接口限流、工单幂等
 
@@ -120,7 +120,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    ├─ 知识库            文章增删改查、审核、发布
    ├─ 智能问答          AI 问答 + 会话管理
    ├─ 数据统计          全局统计看板
-   └─ 系统管理          用户角色、工单分类、审计日志
+   └─ 系统管理          用户角色、工单分类、操作日志、AI 调用日志
 
 🎖️ 客服主管 SUPERVISOR
    ├─ 工作台看板        团队 KPI
@@ -213,7 +213,10 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 ⚙️ 系统管理
    ├─ 用户管理        角色分布看板、新增/编辑用户、角色分配、批量启停、密码重置
    ├─ 工单分类        分类说明与图标配色、按名称/说明检索、启停、上下移动排序
-   └─ 操作日志        登录/工单/知识库/用户/分类全量留痕，按类型·人员·结果·日期筛选，结果可导出 CSV
+   ├─ 操作日志        登录/工单/知识库/用户/分类全量留痕，按类型·人员·结果·日期筛选，结果可导出 CSV
+   └─ AI 日志         智能问答/工单总结/回复建议/处置建议/分类推荐全量调用留痕，
+                      记录发起人·关联工单·模型·提示词·回答正文·响应耗时·引用知识，
+                      概览含成功率与环比，支持按类型·状态·模型·关键字·日期筛选，右侧抽屉看详情
 ```
 
 ---
@@ -333,7 +336,7 @@ intelligent-service-desk/
 | 8    | `knowledge_favorite` | 知识收藏表     | id, article_id, user_id（唯一键去重）, created_at              |
 | 9    | `notification`       | 通知表         | id, user_id, title, content, is_read                         |
 | 10   | `operation_log`      | 操作日志表     | id, operator_id, operator_name, role, action, target_type, target_id, detail, status, ip, created_at |
-| 11   | `ai_task_log`        | AI 任务日志表  | id, task_id, task_type, status, created_at                   |
+| 11   | `ai_task_log`        | AI 调用日志表  | id, request_id, task_type, user_id, user_name, user_role, ticket_no, status, duration_ms, question, answer, model, source, error_summary, created_at |
 | 12   | `app_meta`           | 应用级标记表   | k, v（一次性数据迁移标记，如日志重建）                        |
 
 ### 工单状态机
@@ -503,6 +506,8 @@ intelligent-service-desk/
 | POST   | `/users/batch-status` | 批量启用/禁用    |
 | GET    | `/logs`             | 操作日志（`category`/`operator`/`result`/`start`/`end` 可选筛选，`pageSize` 上限 2000 供导出） |
 | GET    | `/logs/stats`       | 操作日志概览（总数、今日、失败数、活跃操作人） |
+| GET    | `/ai-logs`          | AI 调用日志（`type`/`status`/`model`/`keyword`/`start`/`end` 可选筛选） |
+| GET    | `/ai-logs/stats`    | AI 日志概览（总调用、成功率、平均响应、今日调用及环比、模型字典） |
 | GET    | `/categories`       | 工单分类列表（含说明、状态） |
 | POST   | `/categories`       | 新增分类           |
 | PUT    | `/categories/{id}/status` | 启用/停用分类 |

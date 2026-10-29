@@ -167,17 +167,23 @@ CREATE TABLE IF NOT EXISTS operation_log (
 CREATE TABLE IF NOT EXISTS ai_task_log (
     id            BIGINT      NOT NULL AUTO_INCREMENT,
     request_id    VARCHAR(64) NOT NULL,
-    task_type     VARCHAR(32) NOT NULL,
-    status        VARCHAR(16) NOT NULL,
+    task_type     VARCHAR(32) NOT NULL COMMENT 'QA/SUMMARIZE/CLASSIFY/DRAFT/STEPS',
+    user_id       BIGINT               DEFAULT NULL COMMENT '发起用户 ID',
+    user_name     VARCHAR(64)          DEFAULT NULL COMMENT '发起用户姓名快照',
+    user_role     VARCHAR(32)          DEFAULT NULL COMMENT '发起用户角色快照',
+    ticket_no     VARCHAR(32)          DEFAULT NULL COMMENT '关联工单号',
+    status        VARCHAR(16) NOT NULL COMMENT 'SUCCESS/FAILED/FALLBACK',
     duration_ms   INT                  DEFAULT NULL,
-    question      VARCHAR(500)         DEFAULT NULL,
+    question      VARCHAR(500)         DEFAULT NULL COMMENT '提示词或问题',
+    answer        TEXT                 DEFAULT NULL COMMENT 'AI 回答正文（超长截断）',
     answer_length INT                  DEFAULT NULL,
     model         VARCHAR(64)          DEFAULT NULL,
     source        VARCHAR(200)         DEFAULT NULL COMMENT '引用知识',
     error_summary VARCHAR(500)         DEFAULT NULL,
     created_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    KEY idx_ai_created (created_at)
+    KEY idx_ai_created (created_at),
+    KEY idx_ai_type (task_type)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 调用日志';
 
 CREATE TABLE IF NOT EXISTS app_meta (

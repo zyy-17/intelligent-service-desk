@@ -14,9 +14,14 @@ public class AiTaskLog {
     private Long id;
     private String requestId;
     private String taskType;
+    private Long userId;
+    private String userName;
+    private String userRole;
+    private String ticketNo;
     private String status;
     private Integer durationMs;
     private String question;
+    private String answer;
     private Integer answerLength;
     private String model;
     private String source;

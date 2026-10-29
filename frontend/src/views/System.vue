@@ -290,29 +290,186 @@
 
       <!-- AI 调用日志 -->
       <el-tab-pane label="AI 日志" name="aiLogs">
-        <div class="panel-card table-panel">
-          <el-table :data="aiLogs" stripe v-loading="loadingAiLogs" style="width: 100%">
-            <el-table-column prop="task_type" label="任务类型" width="120" />
-            <el-table-column prop="status" label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.status === 'SUCCESS' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="question" label="问题" min-width="220" show-overflow-tooltip />
-            <el-table-column prop="answer_length" label="回答长度" width="90" align="center" />
-            <el-table-column prop="duration_ms" label="耗时(ms)" width="100" align="center" />
-            <el-table-column prop="model" label="模型" width="120" show-overflow-tooltip />
-            <el-table-column prop="source" label="引用知识" width="120" show-overflow-tooltip />
-            <el-table-column prop="error_summary" label="错误" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="created_at" label="时间" width="160">
-              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
-            </el-table-column>
-          </el-table>
-          <div class="pager">
-            <el-pagination background layout="total, prev, pager, next" :total="aiLogTotal"
-                           :page-size="20" :current-page="aiLogPage" @current-change="loadAiLogs" />
+        <!-- 说明条 -->
+        <div class="ai-tip">
+          <el-icon><InfoFilled /></el-icon>
+          <span>AI 日志记录了系统中所有 AI 相关的调用行为，包括智能问答、工单总结、回复建议、处置建议与分类推荐，帮助您了解 AI 的使用情况与效果。</span>
+        </div>
+
+        <!-- 概览：总调用、成功率、平均响应、今日调用 -->
+        <div class="stat-row ai-stats">
+          <div class="stat-card" v-for="s in aiStats" :key="s.key">
+            <div class="stat-icon" :style="{ background: s.bg, color: s.color }">
+              <el-icon :size="19"><component :is="s.icon" /></el-icon>
+            </div>
+            <div class="stat-body">
+              <div class="stat-label">{{ s.label }}</div>
+              <div class="stat-value">{{ s.value }}</div>
+              <div v-if="s.trendText" class="stat-trend" :class="s.trendClass">
+                <el-icon :size="11"><component :is="s.trendUp ? Top : Bottom" /></el-icon>
+                <span>{{ s.trendText }}</span>
+                <span class="trend-base">{{ s.trendBase }}</span>
+              </div>
+              <div v-else class="stat-trend is-flat">{{ s.trendBase }}</div>
+            </div>
           </div>
         </div>
+
+        <div class="panel-card ai-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <el-date-picker v-model="aiQuery.range" type="daterange" unlink-panels
+                              value-format="YYYY-MM-DD" range-separator="至"
+                              start-placeholder="开始日期" end-placeholder="结束日期"
+                              style="width: 250px" />
+              <el-select v-model="aiQuery.type" placeholder="全部类型" clearable style="width: 132px">
+                <el-option v-for="t in AI_TYPES" :key="t.value" :label="t.label" :value="t.value" />
+              </el-select>
+              <el-select v-model="aiQuery.status" placeholder="全部状态" clearable style="width: 112px">
+                <el-option label="成功" value="SUCCESS" />
+                <el-option label="降级" value="FALLBACK" />
+                <el-option label="失败" value="FAILED" />
+              </el-select>
+              <el-select v-model="aiQuery.model" placeholder="全部模型" clearable style="width: 152px">
+                <el-option v-for="m in aiModels" :key="m" :label="m" :value="m" />
+              </el-select>
+              <el-input v-model="aiQuery.keyword" placeholder="搜索问题 / 用户 / 工单号"
+                        :prefix-icon="Search" clearable style="width: 200px" @keyup.enter="searchAiLogs" />
+              <el-button type="primary" :icon="Search" @click="searchAiLogs">查询</el-button>
+              <el-button :icon="Refresh" @click="resetAiFilter">重置</el-button>
+            </div>
+          </div>
+
+          <el-table :data="aiLogs" v-loading="loadingAiLogs" style="width: 100%">
+            <el-table-column prop="id" label="ID" width="72" />
+            <el-table-column label="类型" width="124">
+              <template #default="{ row }">
+                <span class="act-tag" :style="{ color: aiTypeOf(row.task_type).color, background: aiTypeOf(row.task_type).bg }">
+                  {{ aiTypeOf(row.task_type).label }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="用户" width="160">
+              <template #default="{ row }">
+                <div class="op-cell" v-if="row.user_name">
+                  <div class="avatar" :style="{ background: aiAvatarBg(row) }">{{ aiInitial(row) }}</div>
+                  <div class="op-text">
+                    <div class="op-name">{{ row.user_name }}</div>
+                    <div class="op-role">{{ aiRoleLabel(row.user_role) }}</div>
+                  </div>
+                </div>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="关联工单" width="136">
+              <template #default="{ row }">
+                <span v-if="row.ticket_no" class="mono">{{ row.ticket_no }}</span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="模型" width="140" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="mono">{{ row.model || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="提示词 / 问题" min-width="240" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.question || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="92">
+              <template #default="{ row }">
+                <span class="result-tag" :class="aiStatusClass(row.status)">
+                  <i class="result-dot"></i>{{ aiStatusLabel(row.status) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="响应时间" width="104" align="center">
+              <template #default="{ row }">
+                <span class="mono">{{ aiDuration(row.duration_ms) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作时间" width="156">
+              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="详情" width="76" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openAiDetail(row)">详情</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="ai-empty">
+                <el-icon :size="26"><ChatDotRound /></el-icon>
+                <p>{{ aiLogTotal === 0 ? '还没有 AI 调用记录' : '没有符合条件的记录' }}</p>
+                <span>AI 调用会实时记录在此，使用智能问答、工单总结等能力后即可看到</span>
+              </div>
+            </template>
+          </el-table>
+
+          <div class="pager">
+            <span class="pager-total">共 {{ aiLogTotal }} 条</span>
+            <el-pagination background layout="prev, pager, next, sizes, jumper"
+                           :total="aiLogTotal" :page-size="aiLogPageSize"
+                           :current-page="aiLogPage" :page-sizes="[10, 20, 50]"
+                           @current-change="loadAiLogs"
+                           @size-change="s => { aiLogPageSize = s; loadAiLogs(1) }" />
+          </div>
+        </div>
+
+        <!-- 日志详情抽屉 -->
+        <el-drawer v-model="aiDetailVisible" title="日志详情" size="440px" class="ai-drawer">
+          <div v-if="aiDetail" class="ai-detail">
+            <section>
+              <div class="d-row">
+                <span class="d-k">类型</span>
+                <span class="act-tag" :style="{ color: aiTypeOf(aiDetail.task_type).color, background: aiTypeOf(aiDetail.task_type).bg }">
+                  {{ aiTypeOf(aiDetail.task_type).label }}
+                </span>
+              </div>
+              <div class="d-row">
+                <span class="d-k">状态</span>
+                <span class="result-tag" :class="aiStatusClass(aiDetail.status)">
+                  <i class="result-dot"></i>{{ aiStatusLabel(aiDetail.status) }}
+                </span>
+              </div>
+              <div class="d-row"><span class="d-k">模型</span><span class="d-v">{{ aiDetail.model || '—' }}</span></div>
+              <div class="d-row"><span class="d-k">响应时间</span><span class="d-v mono">{{ aiDuration(aiDetail.duration_ms) }}</span></div>
+              <div class="d-row"><span class="d-k">操作时间</span><span class="d-v">{{ fmtTime(aiDetail.created_at) }}</span></div>
+              <div class="d-row"><span class="d-k">关联工单</span><span class="d-v mono">{{ aiDetail.ticket_no || '—' }}</span></div>
+            </section>
+
+            <section>
+              <h4>发起用户</h4>
+              <div class="d-row" v-if="aiDetail.user_name">
+                <span class="d-k">用户</span>
+                <span class="d-v">{{ aiDetail.user_name }}（{{ aiRoleLabel(aiDetail.user_role) }}）</span>
+              </div>
+              <div class="d-row" v-else><span class="d-k">用户</span><span class="d-v muted">未记录</span></div>
+            </section>
+
+            <section>
+              <h4>请求内容</h4>
+              <p class="d-quote">{{ aiDetail.question || '（无）' }}</p>
+            </section>
+
+            <section>
+              <h4>返回结果</h4>
+              <p v-if="aiDetail.answer" class="d-answer">{{ aiDetail.answer }}</p>
+              <p v-else-if="aiDetail.error_summary" class="d-error">{{ aiDetail.error_summary }}</p>
+              <p v-else class="muted">本次调用没有返回内容</p>
+              <div v-if="aiDetail.answer_length" class="d-meta">共 {{ aiDetail.answer_length }} 字</div>
+            </section>
+
+            <section>
+              <h4>引用知识</h4>
+              <p v-if="aiDetail.source" class="d-v">{{ aiDetail.source }}</p>
+              <p v-else class="muted">无</p>
+            </section>
+
+            <section>
+              <h4>请求标识</h4>
+              <p class="mono d-meta">{{ aiDetail.request_id }}</p>
+            </section>
+          </div>
+        </el-drawer>
       </el-tab-pane>
     </el-tabs>
 
@@ -386,7 +543,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Search, Refresh, MoreFilled, Edit, Download,
   UserFilled, Medal, Avatar, Headset, User,
-  Promotion, Setting, Money, ChatDotRound, Warning, Collection
+  Promotion, Setting, Money, ChatDotRound, Warning, Collection,
+  InfoFilled, DataLine, CircleCheck, Timer, Odometer, Top, Bottom
 } from '@element-plus/icons-vue'
 import api from '../api'
 
@@ -405,7 +563,11 @@ const exporting = ref(false)
 const aiLogs = ref([])
 const loadingAiLogs = ref(false)
 const aiLogPage = ref(1)
+const aiLogPageSize = ref(10)
 const aiLogTotal = ref(0)
+const aiStatData = ref({})
+const aiDetailVisible = ref(false)
+const aiDetail = ref(null)
 
 // 用户列表的筛选与分页（数据量小，全部在前端过滤）
 const userQuery = reactive({ keyword: '', role: '', status: '' })
@@ -420,6 +582,9 @@ const catPageSize = ref(10)
 
 // 操作日志的筛选条件（服务端过滤，改动后点「查询」生效）
 const logQuery = reactive({ range: null, category: '', result: '', operator: '' })
+
+// AI 日志的筛选条件（服务端过滤，改动后点「查询」生效）
+const aiQuery = reactive({ range: null, type: '', status: '', model: '', keyword: '' })
 
 const userVisible = ref(false)
 const savingUser = ref(false)
@@ -528,6 +693,97 @@ function logAvatarBg(row) {
 function logInitial(row) {
   const name = String(row.operator_name || '?').trim()
   return name ? name.charAt(0).toUpperCase() : '?'
+}
+
+/** AI 任务类型元数据：中文名与彩色标签配色 */
+const AI_TYPES = [
+  { value: 'QA', label: '智能问答', color: '#3b82f6', bg: 'rgba(59,130,246,.10)' },
+  { value: 'SUMMARIZE', label: '工单总结', color: '#8b5cf6', bg: 'rgba(139,92,246,.10)' },
+  { value: 'DRAFT', label: '回复建议', color: '#f59e0b', bg: 'rgba(245,158,11,.12)' },
+  { value: 'STEPS', label: '处置建议', color: '#10b981', bg: 'rgba(16,185,129,.10)' },
+  { value: 'CLASSIFY', label: '分类推荐', color: '#06b6d4', bg: 'rgba(6,182,212,.10)' }
+]
+
+/** 取 AI 类型元数据，未知类型回落到灰色样式 */
+function aiTypeOf(type) {
+  return AI_TYPES.find(t => t.value === type) ||
+    { label: type || '未知', color: '#64748b', bg: 'rgba(100,116,139,.10)' }
+}
+
+/** 库里出现过的模型列表，供筛选下拉 */
+const aiModels = computed(() => aiStatData.value.models || [])
+
+/** 状态文案：成功 / 降级 / 失败 */
+function aiStatusLabel(status) {
+  if (status === 'FAILED') return '失败'
+  return status === 'FALLBACK' ? '降级' : '成功'
+}
+
+/** 状态配色：成功绿、降级橙、失败红 */
+function aiStatusClass(status) {
+  if (status === 'FAILED') return 'is-fail'
+  return status === 'FALLBACK' ? 'is-warn' : 'is-ok'
+}
+
+/** 响应时间格式化：超过 1 秒转成秒显示 */
+function aiDuration(ms) {
+  const v = Number(ms) || 0
+  if (!v) return '—'
+  return v >= 1000 ? (v / 1000).toFixed(1) + 's' : v + 'ms'
+}
+
+/** 角色中文名（AI 日志里存的是角色码） */
+function aiRoleLabel(role) {
+  return role ? roleOf(role).label : '—'
+}
+
+/** AI 日志头像底色：优先用户头像色，其次按角色色 */
+function aiAvatarBg(row) {
+  return row.avatar_color || roleOf(row.user_role).color
+}
+
+/** AI 日志头像文字 */
+function aiInitial(row) {
+  const name = String(row.user_name || '?').trim()
+  return name ? name.charAt(0).toUpperCase() : '?'
+}
+
+/** AI 日志概览统计卡（含环比） */
+const aiStats = computed(() => {
+  const d = aiStatData.value || {}
+  const trend = (v, base) => {
+    const n = Number(v) || 0
+    return {
+      trendText: n === 0 ? '' : (n > 0 ? '+' : '') + n + '%',
+      trendUp: n >= 0,
+      trendClass: n > 0 ? 'is-up' : (n < 0 ? 'is-down' : 'is-flat'),
+      trendBase: base
+    }
+  }
+  return [
+    {
+      key: 'total', label: '总调用次数', value: d.total || 0, icon: DataLine,
+      color: '#3b82f6', bg: 'rgba(59,130,246,.10)', ...trend(d.totalTrend, '较上周')
+    },
+    {
+      key: 'rate', label: '成功率', value: (d.successRate || 0) + '%', icon: CircleCheck,
+      color: '#10b981', bg: 'rgba(16,185,129,.10)', ...trend(d.successRateTrend, '较上周')
+    },
+    {
+      key: 'avg', label: '平均响应时间', value: aiDuration(d.avgDuration), icon: Timer,
+      color: '#8b5cf6', bg: 'rgba(139,92,246,.10)', ...trend(d.avgDurationTrend, '较上周')
+    },
+    {
+      key: 'today', label: '今日调用次数', value: d.today || 0, icon: Odometer,
+      color: '#f59e0b', bg: 'rgba(245,158,11,.12)', ...trend(d.todayTrend, '较昨日')
+    }
+  ]
+})
+
+/** 打开日志详情抽屉 */
+function openAiDetail(row) {
+  aiDetail.value = row
+  aiDetailVisible.value = true
 }
 
 /** 统计卡：总数 + 各角色人数 */
@@ -733,14 +989,46 @@ function csvCell(value) {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
+/** 加载 AI 日志分页（带筛选条件） */
 async function loadAiLogs(page = 1) {
   loadingAiLogs.value = true
   aiLogPage.value = page
   try {
-    const data = await api.get('/admin/ai-logs', { params: { page, pageSize: 20 } })
+    const params = { page, pageSize: aiLogPageSize.value }
+    if (aiQuery.type) params.type = aiQuery.type
+    if (aiQuery.status) params.status = aiQuery.status
+    if (aiQuery.model) params.model = aiQuery.model
+    if (aiQuery.keyword.trim()) params.keyword = aiQuery.keyword.trim()
+    if (aiQuery.range && aiQuery.range.length === 2) {
+      params.start = aiQuery.range[0]
+      params.end = aiQuery.range[1]
+    }
+    const data = await api.get('/admin/ai-logs', { params })
     aiLogs.value = data.list || []
     aiLogTotal.value = data.total
   } finally { loadingAiLogs.value = false }
+}
+
+/** 加载 AI 日志概览统计与筛选项字典 */
+async function loadAiStats() {
+  try {
+    aiStatData.value = await api.get('/admin/ai-logs/stats')
+  } catch (e) { /* 拦截器已提示 */ }
+}
+
+/** 点击查询：回到第一页并按当前筛选重新加载 */
+function searchAiLogs() {
+  loadAiLogs(1)
+}
+
+/** 重置 AI 日志筛选条件 */
+function resetAiFilter() {
+  aiQuery.range = null
+  aiQuery.type = ''
+  aiQuery.status = ''
+  aiQuery.model = ''
+  aiQuery.keyword = ''
+  loadAiLogs(1)
 }
 
 /** 勾选变化时记录待批量操作用户 */
@@ -928,6 +1216,7 @@ onMounted(() => {
   loadLogs(1)
   loadLogStats()
   loadAiLogs(1)
+  loadAiStats()
 })
 </script>
 
@@ -1022,13 +1311,73 @@ onMounted(() => {
 .result-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .result-tag.is-ok { color: var(--success); }
 .result-tag.is-fail { color: var(--danger); }
+.result-tag.is-warn { color: #f59e0b; }
+.muted { color: var(--text-muted); font-size: 12px; }
+
+/* AI 日志：说明条 + 概览 4 张卡 + 表格卡 + 详情抽屉 */
+.ai-tip {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid rgba(59, 130, 246, .16);
+  background: rgba(59, 130, 246, .06);
+  color: var(--text-sub); font-size: 12.5px; line-height: 1.6;
+}
+.ai-tip .el-icon { color: #3b82f6; flex: none; }
+.ai-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ai-stats .stat-card { align-items: flex-start; }
+.ai-panel { padding: 18px 18px 8px; }
+.stat-trend {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-top: 4px; font-size: 11.5px; line-height: 1.3;
+}
+.stat-trend.is-up { color: var(--success); }
+.stat-trend.is-down { color: var(--danger); }
+.stat-trend.is-flat { color: var(--text-muted); }
+.stat-trend .trend-base { color: var(--text-muted); margin-left: 2px; }
+
+.ai-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 46px 0; color: var(--text-muted);
+}
+.ai-empty .el-icon { color: #c7cbd6; }
+.ai-empty p { margin: 6px 0 0; font-size: 14px; color: var(--text-sub); }
+.ai-empty span { font-size: 12px; }
+
+.ai-detail section {
+  padding: 14px 0; border-bottom: 1px solid var(--border, #eef0f5);
+}
+.ai-detail section:first-child { padding-top: 0; }
+.ai-detail section:last-child { border-bottom: none; }
+.ai-detail h4 {
+  margin: 0 0 10px; font-size: 12.5px; font-weight: 600;
+  color: var(--text-sub); letter-spacing: .02em;
+}
+.d-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; font-size: 13px; }
+.d-row:last-child { margin-bottom: 0; }
+.d-k { width: 66px; flex: none; color: var(--text-muted); font-size: 12.5px; }
+.d-v { color: var(--text-main); word-break: break-all; }
+.d-quote {
+  margin: 0; padding: 10px 12px; border-radius: 8px;
+  background: rgba(100, 116, 139, .07);
+  color: var(--text-main); font-size: 13px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+}
+.d-answer {
+  margin: 0; color: var(--text-main); font-size: 13px; line-height: 1.8;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow-y: auto;
+}
+.d-error { margin: 0; color: var(--danger); font-size: 13px; line-height: 1.7; }
+.d-meta { margin: 8px 0 0; font-size: 11.5px; color: var(--text-muted); }
 
 @media (max-width: 1280px) {
   .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .log-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ai-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 960px) {
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .log-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

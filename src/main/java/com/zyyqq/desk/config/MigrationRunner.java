@@ -39,6 +39,17 @@ public class MigrationRunner implements CommandLineRunner {
                 "ALTER TABLE operation_log ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'SUCCESS' COMMENT '执行结果 SUCCESS/FAILED' AFTER detail");
         addColumnIfMissing("operation_log", "role",
                 "ALTER TABLE operation_log ADD COLUMN role VARCHAR(16) DEFAULT NULL COMMENT '操作人角色快照' AFTER operator_name");
+        // AI 日志：补调用发起人、关联工单与回答正文，支撑「谁在什么工单上让 AI 做了什么」
+        addColumnIfMissing("ai_task_log", "user_id",
+                "ALTER TABLE ai_task_log ADD COLUMN user_id BIGINT DEFAULT NULL COMMENT '发起用户 ID' AFTER task_type");
+        addColumnIfMissing("ai_task_log", "user_name",
+                "ALTER TABLE ai_task_log ADD COLUMN user_name VARCHAR(64) DEFAULT NULL COMMENT '发起用户姓名快照' AFTER user_id");
+        addColumnIfMissing("ai_task_log", "user_role",
+                "ALTER TABLE ai_task_log ADD COLUMN user_role VARCHAR(32) DEFAULT NULL COMMENT '发起用户角色快照' AFTER user_name");
+        addColumnIfMissing("ai_task_log", "ticket_no",
+                "ALTER TABLE ai_task_log ADD COLUMN ticket_no VARCHAR(32) DEFAULT NULL COMMENT '关联工单号' AFTER user_role");
+        addColumnIfMissing("ai_task_log", "answer",
+                "ALTER TABLE ai_task_log ADD COLUMN answer TEXT DEFAULT NULL COMMENT 'AI 回答正文（超长截断）' AFTER question");
     }
 
     /** 列不存在时执行 DDL 补齐 */

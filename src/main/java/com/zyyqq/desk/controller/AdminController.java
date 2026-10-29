@@ -107,11 +107,23 @@ public class AdminController {
         return ApiResponse.ok(adminService.logStats());
     }
 
-    /** AI 调用日志分页 */
+    /** AI 调用日志分页（支持类型、结果、模型、关键字、日期范围筛选） */
     @GetMapping("/ai-logs")
     public ApiResponse<PageResult<Map<String, Object>>> aiLogs(@RequestParam(defaultValue = "1") int page,
-                                                               @RequestParam(defaultValue = "20") int pageSize) {
-        return ApiResponse.ok(adminService.aiLogs(page, pageSize));
+                                                               @RequestParam(defaultValue = "10") int pageSize,
+                                                               @RequestParam(required = false) String type,
+                                                               @RequestParam(required = false) String status,
+                                                               @RequestParam(required = false) String model,
+                                                               @RequestParam(required = false) String keyword,
+                                                               @RequestParam(required = false) String start,
+                                                               @RequestParam(required = false) String end) {
+        return ApiResponse.ok(adminService.aiLogs(page, pageSize, type, status, model, keyword, start, end));
+    }
+
+    /** AI 日志概览统计（顶部统计卡与筛选项字典） */
+    @GetMapping("/ai-logs/stats")
+    public ApiResponse<Map<String, Object>> aiLogStats() {
+        return ApiResponse.ok(adminService.aiLogStats());
     }
 
     /** 工单分类列表 */

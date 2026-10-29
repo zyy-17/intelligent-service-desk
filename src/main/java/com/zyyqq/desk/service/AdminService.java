@@ -303,16 +303,147 @@ public class AdminService {
         return v == null ? 0 : v;
     }
 
-    /** AI 调用日志：按时间倒序分页返回，供管理员监控 AI 调用 */
-    public PageResult<Map<String, Object>> aiLogs(int page, int pageSize) {
-        int size = Math.min(Math.max(pageSize, 1), 100);
+    /**
+     * AI 调用日志：支持类型/状态/模型/关键字/日期筛选，联表带出发起人头像色。
+     *
+     * @param type    任务类型（QA/SUMMARIZE/CLASSIFY/DRAFT/STEPS），空则不限
+     * @param status  执行结果（SUCCESS/FAILED/FALLBACK），空则不限
+     * @param model   模型名，空则不限
+     * @param keyword 关键字（问题、发起人、工单号模糊匹配）
+     * @param start   起始日期（含），yyyy-MM-dd
+     * @param end     结束日期（含），yyyy-MM-dd
+     */
+    public PageResult<Map<String, Object>> aiLogs(int page, int pageSize, String type, String status,
+                                                  String model, String keyword, String start, String end) {
+        int size = Math.min(Math.max(pageSize, 1), 2000);
         int p = Math.max(page, 1);
-        long total = jdbc.queryForObject("SELECT COUNT(*) FROM ai_task_log", Long.class);
+        StringBuilder where = new StringBuilder(" WHERE 1=1 ");
+        List<Object> args = new ArrayList<>();
+        appendAiLogFilters(where, args, type, status, model, keyword, start, end);
+
+        Long total = jdbc.queryForObject("SELECT COUNT(*)" + AI_LOG_FROM + where, Long.class, args.toArray());
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(size);
+        pageArgs.add((p - 1) * size);
         List<Map<String, Object>> list = jdbc.queryForList(
-                "SELECT id, request_id, task_type, status, duration_ms, question, answer_length, " +
-                        "model, source, error_summary, created_at FROM ai_task_log ORDER BY id DESC LIMIT ? OFFSET ?",
-                size, (p - 1) * size);
-        return PageResult.of(list, total, p, size);
+                "SELECT l.id, l.request_id, l.task_type, l.user_id, l.user_name, l.user_role, l.ticket_no, " +
+                        "l.status, l.duration_ms, l.question, l.answer, l.answer_length, l.model, l.source, " +
+                        "l.error_summary, l.created_at, u.avatar_color, u.avatar_url" +
+                        AI_LOG_FROM + where + " ORDER BY l.id DESC LIMIT ? OFFSET ?", pageArgs.toArray());
+        return PageResult.of(list, total == null ? 0 : total, p, size);
+    }
+
+    /** AI 日志概览：总量、成功率、平均响应、今日调用及环比，供页面顶部统计卡 */
+    public Map<String, Object> aiLogStats() {
+        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
+        LocalDateTime yesterdayStart = todayStart.minusDays(1);
+        LocalDateTime weekStart = todayStart.minusDays(6);
+        LocalDateTime lastWeekStart = todayStart.minusDays(13);
+
+        long total = countOf("SELECT COUNT(*) FROM ai_task_log");
+        long success = countOf("SELECT COUNT(*) FROM ai_task_log WHERE status = 'SUCCESS'");
+        long failed = countOf("SELECT COUNT(*) FROM ai_task_log WHERE status = 'FAILED'");
+        long fallback = countOf("SELECT COUNT(*) FROM ai_task_log WHERE status = 'FALLBACK'");
+        long today = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ?", todayStart);
+        long yesterday = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ? AND created_at < ?",
+                yesterdayStart, todayStart);
+        long week = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ?", weekStart);
+        long lastWeek = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ? AND created_at < ?",
+                lastWeekStart, weekStart);
+        long weekSuccess = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ? AND status = 'SUCCESS'", weekStart);
+        long lastWeekSuccess = countOf("SELECT COUNT(*) FROM ai_task_log WHERE created_at >= ? AND created_at < ? " +
+                "AND status = 'SUCCESS'", lastWeekStart, weekStart);
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("total", total);
+        m.put("success", success);
+        m.put("failed", failed);
+        m.put("fallback", fallback);
+        m.put("successRate", rate(success, total));
+        m.put("avgDuration", avgDuration(null, null));
+        m.put("today", today);
+        // 环比：调用量按「近 7 天 vs 前 7 天」，今日按「今天 vs 昨天」
+        m.put("totalTrend", growth(week, lastWeek));
+        m.put("todayTrend", growth(today, yesterday));
+        m.put("successRateTrend", round1(rate(weekSuccess, week) - rate(lastWeekSuccess, lastWeek)));
+        m.put("avgDurationTrend", round1(growth(avgDuration(weekStart, null), avgDuration(lastWeekStart, weekStart))));
+        // 各类型计数，前端用于类型下拉显示数量
+        m.put("types", jdbc.queryForList(
+                "SELECT task_type AS task_type, COUNT(*) AS cnt FROM ai_task_log GROUP BY task_type"));
+        m.put("models", jdbc.queryForList(
+                "SELECT DISTINCT model FROM ai_task_log WHERE model IS NOT NULL AND model <> '' ORDER BY model",
+                String.class));
+        return m;
+    }
+
+    /** AI 日志查询的公共 FROM 片段：联表取发起人头像色与头像地址 */
+    private static final String AI_LOG_FROM = " FROM ai_task_log l LEFT JOIN sys_user u ON u.id = l.user_id";
+
+    /** 把 AI 日志筛选条件拼进 WHERE 并收集参数 */
+    private void appendAiLogFilters(StringBuilder where, List<Object> args, String type, String status,
+                                    String model, String keyword, String start, String end) {
+        if (type != null && !type.isBlank()) {
+            where.append(" AND l.task_type = ? ");
+            args.add(type.toUpperCase());
+        }
+        if (status != null && !status.isBlank()) {
+            where.append(" AND l.status = ? ");
+            args.add(status.toUpperCase());
+        }
+        if (model != null && !model.isBlank()) {
+            where.append(" AND l.model = ? ");
+            args.add(model);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            // 一个输入框覆盖三种查法：问题内容、发起人姓名、关联工单号
+            where.append(" AND (l.question LIKE ? OR l.user_name LIKE ? OR l.ticket_no LIKE ?) ");
+            String like = "%" + keyword.trim() + "%";
+            args.add(like);
+            args.add(like);
+            args.add(like);
+        }
+        if (start != null && !start.isBlank()) {
+            where.append(" AND l.created_at >= ? ");
+            args.add(LocalDate.parse(start).atStartOfDay());
+        }
+        if (end != null && !end.isBlank()) {
+            where.append(" AND l.created_at <= ? ");
+            args.add(LocalDate.parse(end).atTime(23, 59, 59));
+        }
+    }
+
+    /** 计算百分比成功率，分母为 0 时返回 0 */
+    private double rate(long part, long total) {
+        return total == 0 ? 0 : round1(part * 100.0 / total);
+    }
+
+    /** 保留一位小数 */
+    private double round1(double v) {
+        return Math.round(v * 10.0) / 10.0;
+    }
+
+    /** 计算环比增长率（%），基准为 0 时按 100% 处理避免除零 */
+    private double growth(double current, double base) {
+        if (base <= 0) {
+            return current <= 0 ? 0 : 100.0;
+        }
+        return round1((current - base) * 100.0 / base);
+    }
+
+    /** 平均响应时间（毫秒），可传入时间区间，区间为空则统计全部 */
+    private double avgDuration(LocalDateTime from, LocalDateTime to) {
+        StringBuilder sql = new StringBuilder("SELECT AVG(duration_ms) FROM ai_task_log WHERE duration_ms IS NOT NULL");
+        List<Object> args = new ArrayList<>();
+        if (from != null) {
+            sql.append(" AND created_at >= ?");
+            args.add(from);
+        }
+        if (to != null) {
+            sql.append(" AND created_at < ?");
+            args.add(to);
+        }
+        Double v = jdbc.queryForObject(sql.toString(), Double.class, args.toArray());
+        return v == null ? 0 : round1(v);
     }
 
     /** 查询工单分类列表（含说明与状态，供管理页展示） */

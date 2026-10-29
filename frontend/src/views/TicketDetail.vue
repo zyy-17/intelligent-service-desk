@@ -626,6 +626,7 @@ async function loadSummary() {
   summarizing.value = true
   try {
     const r = await api.post('/ai/summarize', {
+      ticket_id: Number(ticketId.value),
       title: title.value,
       description: val(ticket.value, 'description') || ''
     })
@@ -687,6 +688,7 @@ async function useDraft() {
   drafting.value = true
   try {
     const r = await api.post('/ai/draft', {
+      ticket_id: Number(ticketId.value),
       title: title.value,
       description: val(ticket.value, 'description') || '',
       knowledge: relatedKnowledge.value.map(a => ({ id: a.id, title: a.title, body: a.summary || '' }))

@@ -34,6 +34,9 @@ public class AiService {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
+    /** 日志中回答正文的最大留存长度，超出截断避免单条日志过大 */
+    private static final int MAX_ANSWER_LEN = 2000;
+
     public AiService(AppProperties props, KnowledgeArticleRepository articleRepository,
                      AiTaskLogRepository aiLogRepository, AiContextService contextService, JdbcTemplate jdbc) {
         this.props = props;
@@ -55,10 +58,10 @@ public class AiService {
         Object userId = body.get("user_id");
         String userRole = body.get("user_role") == null ? null : String.valueOf(body.get("user_role"));
         String requestId = UUID.randomUUID().toString().replace("-", "");
-        long start = System.currentTimeMillis();
         if (question == null || question.isBlank()) {
             return Map.of("answer", "请输入您的问题", "source", "无", "fallback", true);
         }
+        AiCall call = new AiCall(requestId, "QA", question, caller(body), null);
 
         // 1. 本地知识库检索（用于组装传给 FastAPI 的上下文，以及降级兜底）
         List<KnowledgeArticle> hits = articleRepository.search(question.trim(), 5);
@@ -68,34 +71,77 @@ public class AiService {
 
         // 2. 优先调用 FastAPI AI 服务
         AppProperties.AiService aiService = props.getAiService();
+        String error = null;
         if (aiService.getBaseUrl() != null && !aiService.getBaseUrl().isBlank()) {
             try {
                 Map<String, Object> result = callFastApi(question, sessionId, userId, userRole, hits, aiService);
-                long duration = System.currentTimeMillis() - start;
-                saveLog(requestId, "QA", "SUCCESS", (int) duration, question,
-                        String.valueOf(result.get("answer")).length(),
-                        (String) result.get("model"), (String) result.get("source"), null);
+                String answer = String.valueOf(result.get("answer"));
+                int duration = call.finish("SUCCESS", answer, (String) result.get("model"),
+                        (String) result.get("source"), null);
                 log.info("[AI-QA] requestId={} 用户={} 问题={} 来源={} 耗时={}ms 回答长度={}",
                         requestId, userId, truncate(question, 100), result.get("source"), duration,
-                        String.valueOf(result.get("answer")).length());
+                        answer.length());
                 return result;
             } catch (Exception e) {
-                long duration = System.currentTimeMillis() - start;
-                saveLog(requestId, "QA", "FAILED", (int) duration, question, 0, "fastapi", null, e.getMessage());
+                // 失败不单独记一条，错误原因带入降级那条日志，保证一次调用只记一条
+                error = e.getMessage();
                 log.warn("FastAPI AI 服务调用失败，降级为本地知识库检索：{}", e.getMessage());
-                log.info("[AI-QA] requestId={} 用户={} 问题={} 调用FastAPI失败耗时={}ms 错误={}",
-                        requestId, userId, truncate(question, 100), duration, e.getMessage());
             }
         }
 
         // 3. 降级：本地知识库检索
-        long duration = System.currentTimeMillis() - start;
         String answer = buildFallbackAnswer(question, hits);
         String source = hits.isEmpty() ? "未找到匹配知识" : hits.get(0).getTitle();
-        saveLog(requestId, "QA", "FALLBACK", (int) duration, question, answer.length(), "knowledge-base", source, null);
+        int duration = call.finish("FALLBACK", answer, "knowledge-base", source, error);
         log.info("[AI-QA] requestId={} 用户={} 问题={} 来源=本地知识库 耗时={}ms 命中数={}",
                 requestId, userId, truncate(question, 100), duration, hits.size());
         return Map.of("answer", answer, "source", source, "references", brief(hits), "fallback", true);
+    }
+
+    /** 工单摘要：转发 AI 服务生成摘要，并记录调用日志 */
+    public Object summarize(Map<String, Object> body) {
+        return runTask("SUMMARIZE", "/api/ai/summarize", body,
+                promptOf(body, "title", "description"), body.get("ticket_id"));
+    }
+
+    /** 分类推荐：按工单标题与描述推荐分类，并记录调用日志 */
+    public Object classify(Map<String, Object> body) {
+        return runTask("CLASSIFY", "/api/ai/classify", body,
+                promptOf(body, "title", "description"), body.get("ticket_id"));
+    }
+
+    /** 回复草稿：生成客服回复草稿，并记录调用日志 */
+    public Object draft(Map<String, Object> body) {
+        return runTask("DRAFT", "/api/ai/draft", body,
+                promptOf(body, "title", "description"), body.get("ticket_id"));
+    }
+
+    /** 从请求体里挑若干个文本字段拼成日志里的「提示词」，便于回看上下文 */
+    private String promptOf(Map<String, Object> body, String... keys) {
+        StringBuilder sb = new StringBuilder();
+        for (String key : keys) {
+            Object v = body == null ? null : body.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append(" / ");
+                }
+                sb.append(String.valueOf(v).trim());
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 执行一次带留痕的 AI 能力调用：成功与失败都写入日志 */
+    private Object runTask(String taskType, String path, Map<String, Object> body, String prompt, Object ticketId) {
+        AiCall call = new AiCall(taskType, prompt, ticketNoOf(ticketId));
+        try {
+            Object result = proxy("POST", path, body);
+            call.finish("SUCCESS", answerText(result), modelOf(result), path.replace("/api/ai/", ""), null);
+            return result;
+        } catch (RuntimeException e) {
+            call.finish("FAILED", null, null, path.replace("/api/ai/", ""), e.getMessage());
+            throw e;
+        }
     }
 
     /** 调用 FastAPI 的 /api/ai/chat 接口，携带本地检索知识、用户画像、工单与知识库目录 */
@@ -176,7 +222,7 @@ public class AiService {
     public Map<String, Object> suggestSteps(Long ticketId) {
         Map<String, Object> row;
         try {
-            row = jdbc.queryForMap("SELECT t.title, t.description, c.name AS category_name FROM ticket t " +
+            row = jdbc.queryForMap("SELECT t.title, t.description, t.ticket_no, c.name AS category_name FROM ticket t " +
                     "LEFT JOIN ticket_category c ON c.id = t.category_id WHERE t.id = ?", ticketId);
         } catch (Exception e) {
             throw new com.zyyqq.desk.common.BizException("工单不存在");
@@ -184,6 +230,8 @@ public class AiService {
         String title = row.get("title") == null ? "" : String.valueOf(row.get("title"));
         String description = row.get("description") == null ? "" : String.valueOf(row.get("description"));
         String category = row.get("category_name") == null ? "" : String.valueOf(row.get("category_name"));
+        String ticketNo = row.get("ticket_no") == null ? null : String.valueOf(row.get("ticket_no"));
+        AiCall call = new AiCall("STEPS", title.isBlank() ? category : title, ticketNo);
 
         // 用标题检索相关知识作为建议依据（检索不到时退回分类名）
         List<KnowledgeArticle> hits = articleRepository.search(title.isBlank() ? category : title, 3);
@@ -199,8 +247,9 @@ public class AiService {
         try {
             Object result = proxy("POST", "/api/ai/suggest-steps", payload);
             Map<String, Object> map = result instanceof Map ? (Map<String, Object>) result : new HashMap<>();
-            log.info("[AI-Steps] 工单={} 生成建议 {} 条", ticketId,
-                    map.get("steps") instanceof List ? ((List<?>) map.get("steps")).size() : 0);
+            int count = map.get("steps") instanceof List ? ((List<?>) map.get("steps")).size() : 0;
+            call.finish("SUCCESS", answerText(map), modelOf(map), "suggest-steps", null);
+            log.info("[AI-Steps] 工单={} 生成建议 {} 条", ticketId, count);
             return map;
         } catch (Exception e) {
             // AI 服务不可用时用知识库兜底，保证详情页右栏不空
@@ -226,6 +275,7 @@ public class AiService {
             fallback.put("steps", steps);
             fallback.put("fallback", true);
             fallback.put("source", "知识库");
+            call.finish("FALLBACK", answerText(fallback), "knowledge-base", "知识库", e.getMessage());
             return fallback;
         }
     }
@@ -351,26 +401,178 @@ public class AiService {
         return r;
     }
 
-    /** 保存 AI 调用日志（失败不影响主流程） */
-    private void saveLog(String requestId, String taskType, String status, int duration, String question,
-                         Integer answerLength, String model, String source, String error) {
-        try {
-            AiTaskLog log = new AiTaskLog();
-            log.setRequestId(requestId);
-            log.setTaskType(taskType);
-            log.setStatus(status);
-            log.setDurationMs(duration);
-            log.setQuestion(truncate(question, 500));
-            log.setAnswerLength(answerLength);
-            log.setModel(model);
-            log.setSource(source);
-            log.setErrorSummary(error == null ? null : truncate(error, 500));
-            log.setCreatedAt(LocalDateTime.now());
-            aiLogRepository.save(log);
-        } catch (Exception e) {
-            // 记录失败不影响主流程
-            log.warn("AI 日志写入失败", e);
+    /** 调用方身份快照（用户 ID / 姓名 / 角色），用于日志归属统计 */
+    public record Caller(Long id, String name, String role) {
+        /** 无登录态场景（定时任务等）使用的空身份 */
+        public static final Caller NONE = new Caller(null, null, null);
+    }
+
+    /** 解析调用方身份：优先取请求体携带的用户信息，缺失时回退当前登录态 */
+    private Caller caller(Map<String, Object> body) {
+        Long id = null;
+        String name = null;
+        String role = null;
+        if (body != null) {
+            Object uid = body.get("user_id");
+            if (uid != null && !String.valueOf(uid).isBlank()) {
+                try {
+                    id = Long.valueOf(String.valueOf(uid));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            if (body.get("user_name") != null) {
+                name = String.valueOf(body.get("user_name"));
+            }
+            if (body.get("user_role") != null) {
+                role = String.valueOf(body.get("user_role"));
+            }
         }
+        // 请求体缺字段时（或非 Web 线程）用当前登录态补齐
+        if (id == null || name == null || role == null) {
+            Caller c = currentCaller();
+            if (id == null) {
+                id = c.id();
+            }
+            if (name == null) {
+                name = c.name();
+            }
+            if (role == null) {
+                role = c.role();
+            }
+        }
+        return new Caller(id, name, role);
+    }
+
+    /** 从当前请求线程的登录态取身份，非 Web 线程返回空身份 */
+    private Caller currentCaller() {
+        try {
+            com.zyyqq.desk.security.AuthContext.UserInfo u = com.zyyqq.desk.security.AuthContext.get();
+            return u == null ? Caller.NONE : new Caller(u.id(), u.displayName(), u.role());
+        } catch (Exception e) {
+            return Caller.NONE;
+        }
+    }
+
+    /** 按工单 ID 取业务单号，查不到返回 null（日志留痕用，不影响主流程） */
+    private String ticketNoOf(Object ticketId) {
+        if (ticketId == null || String.valueOf(ticketId).isBlank()) {
+            return null;
+        }
+        try {
+            List<String> rows = jdbc.queryForList("SELECT ticket_no FROM ticket WHERE id = ?",
+                    String.class, Long.valueOf(String.valueOf(ticketId)));
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 一次 AI 调用的上下文：记录发起人、提示词、关联工单并自动计时。
+     * 调用结束时用 finish(...) 落库，避免各调用点重复拼装参数。
+     */
+    private final class AiCall {
+        private final String requestId;
+        private final String taskType;
+        private final String question;
+        private final Caller caller;
+        private final String ticketNo;
+        private final long start = System.currentTimeMillis();
+
+        /** 在当前请求线程内创建，发起人自动取登录态 */
+        AiCall(String taskType, String question, String ticketNo) {
+            this(UUID.randomUUID().toString().replace("-", ""), taskType, question, caller(null), ticketNo);
+        }
+
+        /** 显式指定请求号与发起人，流式场景需先在进线程前捕获身份 */
+        AiCall(String requestId, String taskType, String question, Caller caller, String ticketNo) {
+            this.requestId = requestId;
+            this.taskType = taskType;
+            this.question = truncate(question, 500);
+            this.caller = caller == null ? Caller.NONE : caller;
+            this.ticketNo = ticketNo;
+        }
+
+        /** 本次调用已耗时（毫秒） */
+        int elapsed() {
+            return (int) (System.currentTimeMillis() - start);
+        }
+
+        /** 结束调用并写入日志，返回耗时；写库异常不影响主流程 */
+        int finish(String status, String answer, String model, String source, String error) {
+            int duration = elapsed();
+            try {
+                AiTaskLog entry = new AiTaskLog();
+                entry.setRequestId(requestId);
+                entry.setTaskType(taskType);
+                entry.setUserId(caller.id());
+                entry.setUserName(caller.name());
+                entry.setUserRole(caller.role());
+                entry.setTicketNo(ticketNo);
+                entry.setStatus(status);
+                entry.setDurationMs(duration);
+                entry.setQuestion(question);
+                entry.setAnswer(truncate(answer, MAX_ANSWER_LEN));
+                entry.setAnswerLength(answer == null ? 0 : answer.length());
+                entry.setModel(model);
+                entry.setSource(truncate(source, 200));
+                entry.setErrorSummary(truncate(error, 500));
+                entry.setCreatedAt(LocalDateTime.now());
+                aiLogRepository.save(entry);
+            } catch (Exception e) {
+                log.warn("AI 日志写入失败", e);
+            }
+            return duration;
+        }
+    }
+
+    /** 从各类 AI 能力返回值中提取可读的回答文本，用于日志留痕 */
+    private String answerText(Object result) {
+        if (result == null) {
+            return null;
+        }
+        if (result instanceof Map<?, ?> m) {
+            for (String key : List.of("summary", "draft", "answer", "text", "category_name", "reason")) {
+                Object v = m.get(key);
+                if (v instanceof String s && !s.isBlank()) {
+                    return s;
+                }
+            }
+            // 分类返回类别名 + 置信度，拼成一句可读结论
+            if (m.get("category") != null) {
+                Object conf = m.get("confidence");
+                return String.valueOf(m.get("category")) + (conf == null ? "" : "（置信度 " + conf + "）");
+            }
+            if (m.get("steps") instanceof List<?> steps) {
+                StringBuilder sb = new StringBuilder();
+                int i = 1;
+                for (Object s : steps) {
+                    if (s instanceof Map<?, ?> sm && sm.get("title") != null) {
+                        if (sb.length() > 0) {
+                            sb.append("；");
+                        }
+                        sb.append(i++).append(". ").append(sm.get("title"));
+                    }
+                }
+                if (sb.length() > 0) {
+                    return sb.toString();
+                }
+            }
+            try {
+                return objectMapper.writeValueAsString(result);
+            } catch (Exception ignored) {
+                return String.valueOf(result);
+            }
+        }
+        return String.valueOf(result);
+    }
+
+    /** 从返回值里取实际使用的模型名 */
+    private String modelOf(Object result) {
+        if (result instanceof Map<?, ?> m && m.get("model") instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        return null;
     }
 
     /** 流式问答：调用 FastAPI 流式端点逐段回调 delta，完成回调 done */
@@ -387,6 +589,7 @@ public class AiService {
             callback.onDone("无", true, null, null, (int) (System.currentTimeMillis() - start), List.of(), false);
             return;
         }
+        AiCall call = new AiCall(requestId, "QA", question, caller(body), null);
 
         // 本地知识库检索作为上下文
         List<KnowledgeArticle> hits = articleRepository.search(question.trim(), 5);
@@ -400,9 +603,9 @@ public class AiService {
             String answer = buildFallbackAnswer(question, hits);
             String source = hits.isEmpty() ? "未找到可靠知识依据" : hits.get(0).getTitle();
             callback.onDelta(answer);
-            callback.onDone(source, true, null, null, (int) (System.currentTimeMillis() - start), brief(hits), !hits.isEmpty());
-            saveLog(requestId, "QA", "FALLBACK", (int) (System.currentTimeMillis() - start), question,
-                    answer.length(), "knowledge-base", source, null);
+            int duration = (int) (System.currentTimeMillis() - start);
+            callback.onDone(source, true, null, null, duration, brief(hits), !hits.isEmpty());
+            call.finish("FALLBACK", answer, "knowledge-base", source, "AI 服务未配置");
             log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 本地降级 命中={}",
                     requestId, userId, truncate(question, 100), hits.size());
             return;
@@ -437,6 +640,7 @@ public class AiService {
         Integer[] durationRef = {null};
         List<Map<String, Object>> refsRef = new ArrayList<>();
         boolean[] groundedRef = {false};
+        String[] errorRef = {null};
 
         try {
             HttpResponse<java.io.InputStream> resp = httpClient.send(req,
@@ -491,15 +695,17 @@ public class AiService {
             groundedRef[0] = !hits.isEmpty();
             callback.onDelta(answer);
             log.warn("流式调用失败，降级本地：{}", e.getMessage());
+            errorRef[0] = e.getMessage();
         }
 
         long duration = System.currentTimeMillis() - start;
         callback.onDone(sourceRef[0], fallbackRef[0], modelRef[0], sidRef[0], (int) duration,
                 refsRef, groundedRef[0]);
-        saveLog(requestId, "QA", fallbackRef[0] ? "FALLBACK" : "SUCCESS", (int) duration, question,
-                answerBuf.length(), fallbackRef[0] ? "knowledge-base" : modelRef[0], sourceRef[0], null);
+        String answer = answerBuf.toString();
+        call.finish(fallbackRef[0] ? "FALLBACK" : "SUCCESS", answer,
+                fallbackRef[0] ? "knowledge-base" : modelRef[0], sourceRef[0], errorRef[0]);
         log.info("[AI-QA-流式] requestId={} 用户={} 问题={} 来源={} 耗时={}ms 回答长度={}",
-                requestId, userId, truncate(question, 100), sourceRef[0], duration, answerBuf.length());
+                requestId, userId, truncate(question, 100), sourceRef[0], duration, answer.length());
     }
 
     /** 流式回调接口：onDelta 逐段返回文本，onDone 返回完成元信息（引用与可信判定） */
