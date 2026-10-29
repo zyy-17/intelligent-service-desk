@@ -24,6 +24,14 @@
           {{ status === 'RESOLVED' ? '关闭工单' : '解决并关闭' }}
         </el-button>
       </div>
+      <!-- 客户侧：工单解决后可对本次服务打分评价 -->
+      <div class="tb-right" v-if="!isStaff && ticket">
+        <el-button v-if="canRate" size="small" type="warning" @click="openRate">评价服务</el-button>
+        <span v-else-if="satisfaction" class="rated-badge">
+          <el-rate :model-value="satisfaction" disabled size="small" />
+          <span class="rated-text">已评价</span>
+        </span>
+      </div>
     </div>
 
     <!-- 待审核提示：客服在工单大厅申请负责处理该工单 -->
@@ -137,7 +145,11 @@
             </li>
             <li v-if="satisfaction">
               <span class="k">客户评价</span>
-              <span class="v strong">{{ '★'.repeat(satisfaction) }}</span>
+              <span class="v strong">{{ '★'.repeat(satisfaction) }} {{ satisfaction }} 星</span>
+            </li>
+            <li v-if="feedbackText">
+              <span class="k">评价内容</span>
+              <span class="v">{{ feedbackText }}</span>
             </li>
           </ul>
         </section>
@@ -302,6 +314,24 @@
       </template>
     </el-dialog>
 
+    <!-- 客户评价弹窗 -->
+    <el-dialog v-model="rateVisible" title="评价本次服务" width="440px">
+      <div class="rate-box">
+        <p class="dlg-tip">工单已解决，请为本次服务打分（满分 5 星），您的评价将用于服务质量统计。</p>
+        <div class="rate-stars">
+          <el-rate v-model="rateForm.rating" :max="5" :texts="RATE_TEXTS" show-text size="large" />
+        </div>
+        <el-input v-model="rateForm.comment" type="textarea" :rows="4" maxlength="200" show-word-limit
+                  placeholder="说说这次服务的感受（选填）：响应是否及时、方案是否有效、态度如何……" />
+      </div>
+      <template #footer>
+        <el-button @click="rateVisible = false">取消</el-button>
+        <el-button type="primary" :loading="ratingSubmit" :disabled="!rateForm.rating" @click="doRate">
+          提交评价
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 解决方案弹窗 -->
     <el-dialog v-model="resolveVisible" title="提交解决方案" width="520px">
       <p class="dlg-tip">提交后工单进入「待客户确认」，客户确认后自动关闭。</p>
@@ -315,7 +345,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, MagicStick, Refresh, Connection, UserFilled } from '@element-plus/icons-vue'
@@ -357,6 +387,12 @@ const assigning = ref(false)
 const resolveVisible = ref(false)
 const solutionText = ref('')
 const resolving = ref(false)
+
+// 客户评价：弹窗状态与表单
+const rateVisible = ref(false)
+const ratingSubmit = ref(false)
+const rateForm = reactive({ rating: 5, comment: '' })
+const RATE_TEXTS = ['很不满意', '不满意', '一般', '满意', '非常满意']
 const timelineRef = ref(null)
 const now = ref(Date.now())
 
@@ -386,6 +422,12 @@ const customerEmail = computed(() => val(ticket.value, 'customerEmail') || '')
 const customerCompany = computed(() => val(ticket.value, 'customerCompany') || '')
 const customerDepartment = computed(() => val(ticket.value, 'customerDepartment') || '')
 const satisfaction = computed(() => val(ticket.value, 'satisfaction') || 0)
+// 客户评价内容（feedback 字段）
+const feedbackText = computed(() => val(ticket.value, 'feedback') || '')
+// 客户可评价：非客服身份、工单已解决/已关闭、且尚未评价
+const canRate = computed(() =>
+  !isStaff.value && ['RESOLVED', 'CLOSED'].includes(status.value) && !satisfaction.value
+)
 const createdAt = computed(() => val(ticket.value, 'createdAt'))
 /* SLA 卡已删，仅保留「服务响应」行所需：解决目标时间 + 实际解决时间换算剩余/超时 */
 const slaResolveAt = computed(() => val(ticket.value, 'slaResolveAt'))
@@ -704,6 +746,33 @@ async function doResolve() {
     await load()
   } catch (e) { /* 拦截器已提示 */ } finally {
     resolving.value = false
+  }
+}
+
+/** 打开发评价弹窗，默认 5 星 */
+function openRate() {
+  rateForm.rating = 5
+  rateForm.comment = ''
+  rateVisible.value = true
+}
+
+/** 提交评价：星级必选，评语选填 */
+async function doRate() {
+  if (!rateForm.rating) {
+    ElMessage.warning('请先选择星级')
+    return
+  }
+  ratingSubmit.value = true
+  try {
+    await api.post(`/tickets/${ticketId.value}/rate`, {
+      rating: rateForm.rating,
+      comment: rateForm.comment.trim()
+    })
+    ElMessage.success('评价已提交，感谢您的反馈')
+    rateVisible.value = false
+    await load()
+  } catch (e) { /* 拦截器已提示 */ } finally {
+    ratingSubmit.value = false
   }
 }
 
@@ -1100,6 +1169,12 @@ onBeforeUnmount(() => {
 .tpl-sub { font-size: 9px; color: #94a3b8; }
 
 .dlg-tip { font-size: 12px; color: #64748b; margin: 0 0 10px; }
+
+/* 客户评价：顶部已评价徽标 + 弹窗内星级与评语 */
+.rated-badge { display: inline-flex; align-items: center; gap: 6px; }
+.rated-text { font-size: 12px; color: #94a3b8; }
+.rate-box { display: flex; flex-direction: column; gap: 12px; }
+.rate-stars { padding: 4px 0 2px; }
 
 @media (max-width: 1400px) {
   .td-grid { grid-template-columns: 260px minmax(0, 1fr) 280px; }

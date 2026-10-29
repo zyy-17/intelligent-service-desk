@@ -24,6 +24,12 @@ public class MigrationRunner implements CommandLineRunner {
     /** 启动时执行表结构迁移 */
     @Override
     public void run(String... args) {
+        // 应用级标记表（一次性数据迁移用），schema.sql 已建，这里再兜一次防止老库缺表
+        jdbc.execute("CREATE TABLE IF NOT EXISTS app_meta (" +
+                "k VARCHAR(64) NOT NULL COMMENT '配置键', " +
+                "v VARCHAR(255) DEFAULT NULL COMMENT '配置值', " +
+                "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+                "PRIMARY KEY (k)) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '应用级标记（一次性数据迁移用）'");
         addColumnIfMissing("sys_user", "avatar_url",
                 "ALTER TABLE sys_user ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL COMMENT '头像文件地址'");
         addColumnIfMissing("ticket_category", "description",

@@ -240,7 +240,7 @@
                   <div class="avatar" :style="{ background: logAvatarBg(row) }">{{ logInitial(row) }}</div>
                   <div class="op-text">
                     <div class="op-name">{{ row.operator_name || '—' }}</div>
-                    <div class="op-role">{{ roleOf(row.role || row.current_role).label }}</div>
+                    <div class="op-role">{{ (row.role || row.current_role) ? roleOf(row.role || row.current_role).label : '系统操作' }}</div>
                   </div>
                 </div>
               </template>
@@ -270,11 +270,6 @@
                 <span class="result-tag" :class="row.status === 'FAILED' ? 'is-fail' : 'is-ok'">
                   <i class="result-dot"></i>{{ row.status === 'FAILED' ? '失败' : '成功' }}
                 </span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="ip" label="IP 地址" width="132">
-              <template #default="{ row }">
-                <span class="mono">{{ row.ip || '—' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="操作时间" width="158">
@@ -698,7 +693,7 @@ async function exportLogs() {
       ElMessage.warning('当前筛选条件下没有可导出的日志')
       return
     }
-    const header = ['ID', '操作人', '角色', '操作类型', '对象类型', '操作对象', '操作内容', '执行结果', 'IP 地址', '操作时间']
+    const header = ['ID', '操作人', '角色', '操作类型', '对象类型', '操作对象', '操作内容', '执行结果', '操作时间']
     const lines = [header]
     rows.forEach(r => {
       lines.push([
@@ -710,7 +705,6 @@ async function exportLogs() {
         r.target_id || '',
         r.detail || '',
         r.status === 'FAILED' ? '失败' : '成功',
-        r.ip || '',
         fmtTime(r.created_at)
       ])
     })

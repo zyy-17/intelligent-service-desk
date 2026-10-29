@@ -97,7 +97,32 @@ public class DataSeeder implements CommandLineRunner {
         ensureKnowledge();
         ensureFavorites();
         ensureRecentTickets();
-        ensureOperationLogs();
+        // 顺序有依赖：先补新解决的工单，再补这些工单的评价，最后才按业务表反推操作日志
+        ensureResolvedTickets();
+        ensureEvaluations();
+        alignCloseHistory();
+        rebuildOperationLogs();
+    }
+
+    /**
+     * 已关闭但缺「关闭」历史记录的工单补一条：closed_at 与状态本身就是既成事实，
+     * 只是早期种子数据没写留痕，补齐后日志才能和工单状态完全对上。
+     */
+    private void alignCloseHistory() {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT t.id, t.assignee_id, t.closed_at FROM ticket t " +
+                        "WHERE t.status = 'CLOSED' AND t.closed_at IS NOT NULL " +
+                        "AND NOT EXISTS (SELECT 1 FROM ticket_history h " +
+                        "                WHERE h.ticket_id = t.id AND h.action = 'CLOSE')");
+        int done = 0;
+        for (Map<String, Object> row : rows) {
+            insertHistory(((Number) row.get("id")).longValue(), row.get("assignee_id"), "CLOSE",
+                    "RESOLVED", "CLOSED", "关闭工单", toDateTime(row.get("closed_at")));
+            done++;
+        }
+        if (done > 0) {
+            log.info("已为 {} 张已关闭工单补齐关闭记录", done);
+        }
     }
 
     /** 初始化用户、分类、知识、工单与通知 */
@@ -677,128 +702,358 @@ public class DataSeeder implements CommandLineRunner {
         return items[items.length - 1];
     }
 
-    /** 演示日志模板：动作、对象类型、允许操作的角色、详情文案（{ticket} 等占位符在生成时替换） */
-    private record LogTemplate(String action, String targetType, List<String> roles, String detail) {
+    /** 工单历史动作 → 操作日志动作的映射 */
+    private static final Map<String, String> HISTORY_ACTION_MAP = new LinkedHashMap<>();
+
+    static {
+        HISTORY_ACTION_MAP.put("CREATE", "CREATE_TICKET");
+        HISTORY_ACTION_MAP.put("APPLY", "APPLY_TICKET");
+        HISTORY_ACTION_MAP.put("REVIEW", "REVIEW_TICKET");
+        HISTORY_ACTION_MAP.put("ASSIGN", "ASSIGN_TICKET");
+        HISTORY_ACTION_MAP.put("ACCEPT", "ACCEPT_TICKET");
+        HISTORY_ACTION_MAP.put("RESOLVE", "RESOLVE_TICKET");
+        HISTORY_ACTION_MAP.put("CONFIRM", "CONFIRM_TICKET");
+        HISTORY_ACTION_MAP.put("CLOSE", "CLOSE_TICKET");
+        HISTORY_ACTION_MAP.put("REOPEN", "REOPEN_TICKET");
+        HISTORY_ACTION_MAP.put("RATE", "RATE_TICKET");
+        HISTORY_ACTION_MAP.put("URGE", "URGE_TICKET");
     }
 
-    /** 操作日志模板池（登录按高频单独处理，不进池） */
-    private static final List<LogTemplate> LOG_TEMPLATES = List.of(
-            new LogTemplate("CHANGE_PASSWORD", "USER", List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"), "修改登录密码"),
-            new LogTemplate("UPDATE_PROFILE", "USER", List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"), "修改个人资料"),
-            new LogTemplate("CREATE_TICKET", "TICKET", List.of("CUSTOMER"), "创建工单 {ticket}"),
-            new LogTemplate("URGE_TICKET", "TICKET", List.of("CUSTOMER"), "客户催办 {ticket}"),
-            new LogTemplate("RATE_TICKET", "TICKET", List.of("CUSTOMER"), "客户评价 5 星 {ticket}"),
-            new LogTemplate("ACCEPT_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR"), "受理工单 {ticket}"),
-            new LogTemplate("REPLY_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR", "ADMIN"), "回复工单 {ticket}"),
-            new LogTemplate("RESOLVE_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR"), "提交解决方案，工单转入待确认 {ticket}"),
-            new LogTemplate("CLOSE_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR", "ADMIN"), "关闭工单 {ticket}"),
-            new LogTemplate("ASSIGN_TICKET", "TICKET", List.of("ADMIN", "SUPERVISOR"), "分配/转派工单 {ticket} 给 {agent}"),
-            new LogTemplate("APPLY_TICKET", "TICKET", List.of("AGENT"), "申请处理工单 {ticket}"),
-            new LogTemplate("REVIEW_TICKET", "TICKET", List.of("ADMIN", "SUPERVISOR"), "审核接单申请 {ticket}"),
-            new LogTemplate("PUBLISH_ARTICLE", "ARTICLE", List.of("ADMIN", "SUPERVISOR"), "发布知识文章《{article}》"),
-            new LogTemplate("UPDATE_ARTICLE", "ARTICLE", List.of("ADMIN", "SUPERVISOR"), "更新知识文章《{article}》"),
-            new LogTemplate("CREATE_USER", "USER", List.of("ADMIN"), "新建用户 {user}"),
-            new LogTemplate("UPDATE_USER", "USER", List.of("ADMIN"), "编辑用户资料 {user}"),
-            new LogTemplate("UPDATE_USER_STATUS", "USER", List.of("ADMIN"), "禁用账号 {user}"),
-            new LogTemplate("RESET_PASSWORD", "USER", List.of("ADMIN"), "重置用户密码 {user}"),
-            new LogTemplate("CREATE_CATEGORY", "CATEGORY", List.of("ADMIN"), "新建工单分类 {category}"),
-            new LogTemplate("UPDATE_CATEGORY", "CATEGORY", List.of("ADMIN"), "更新分类 SLA 配置 {category}")
-    );
+    /** 各星级对应的评语池，保证评语与星级语义匹配 */
+    private static final Map<Integer, String[]> RATE_COMMENTS = new LinkedHashMap<>();
 
-    /** 演示日志使用的内网 / 办公网 IP 池 */
-    private static final String[] DEMO_IPS = {
-            "127.0.0.1", "192.168.1.23", "192.168.1.87", "192.168.3.15", "192.168.3.64",
-            "10.0.12.31", "10.0.12.108", "10.0.8.42", "172.16.5.19", "172.16.5.77",
-            "203.0.113.24", "203.0.113.156", "198.51.100.31"
+    static {
+        RATE_COMMENTS.put(5, new String[]{
+                "响应非常快，问题一次就解决了，感谢！",
+                "客服很专业，耐心解释到我能自己操作，五星好评。",
+                "处理效率很高，晚上提交的第二天一早就好了。",
+                "态度特别好，全程跟进，问题解决得很彻底。",
+                "给客服点赞，方案写得很清楚，照着做就好了。"
+        });
+        RATE_COMMENTS.put(4, new String[]{
+                "整体满意，就是首次回复稍微慢了一点。",
+                "问题解决了，希望以后能有更详细的进度同步。",
+                "服务态度不错，处理过程还算顺利。",
+                "方案有效，如果能提前告知预计时间就更好了。"
+        });
+        RATE_COMMENTS.put(3, new String[]{
+                "问题是解决了，但来回沟通了好几次。",
+                "等待时间有点长，结果还行。",
+                "处理结果可以接受，过程不太顺畅。"
+        });
+        RATE_COMMENTS.put(2, new String[]{
+                "响应速度偏慢，中途换了两个人对接。",
+                "解决方案不是很对路，最后自己摸索着弄好了。"
+        });
+        RATE_COMMENTS.put(1, new String[]{
+                "等了两天才有人回复，体验比较差。",
+                "问题反复出现，没有彻底解决。"
+        });
+    }
+
+    /** 补充「新解决工单」时使用的解决方案文案池 */
+    private static final String[] SOLUTIONS = {
+            "已定位为客户侧配置问题，指导客户重新配置后恢复正常。",
+            "已清理异常缓存并刷新权限，功能恢复正常。",
+            "已为客户补发数据并核对账目，差异已抹平。",
+            "已升级到最新版本，问题不再复现。",
+            "已协调后端修复接口异常，现可正常调用。"
     };
 
+    /** 近 7 天希望保有的「新解决工单」数量，已有足够则不再补充 */
+    private static final int RECENT_RESOLVED_TARGET = 18;
+
+    /** 已解决工单的评价覆盖率目标（客户并非每单都会评价） */
+    private static final double RATE_COVERAGE = 0.72;
+
+    /** 应用级标记键：操作日志是否已按真实业务数据重建过 */
+    private static final String META_LOG_REBUILT = "operation_log_rebuilt";
+
     /**
-     * 近 30 天操作日志演示数据：每天补齐到 4~5 条，当天已有记录则跳过，
-     * 因此重复启动不会重复插入，真实操作产生的日志也不会被覆盖。
+     * 补充近期的「新解决工单」：把进行中的工单推进到已解决，并补上解决方案与流转历史。
+     * 以「近 7 天已解决数量」判断是否需要补，重复启动不会把工单无限解决下去。
      */
-    private void ensureOperationLogs() {
-        List<Map<String, Object>> users = jdbc.queryForList(
-                "SELECT id, username, display_name, role FROM sys_user WHERE status = 1 ORDER BY id");
-        if (users.isEmpty()) {
+    private void ensureResolvedTickets() {
+        LocalDateTime since = LocalDateTime.now().minusDays(7);
+        long have = count("SELECT COUNT(*) FROM ticket WHERE resolved_at >= ?", since);
+        int need = RECENT_RESOLVED_TARGET - (int) have;
+        if (need <= 0) {
             return;
         }
-        Map<String, List<Map<String, Object>>> byRole = new LinkedHashMap<>();
-        for (Map<String, Object> u : users) {
-            byRole.computeIfAbsent(String.valueOf(u.get("role")), k -> new ArrayList<>()).add(u);
-        }
-        List<Map<String, Object>> tickets = jdbc.queryForList(
-                "SELECT ticket_no, title FROM ticket ORDER BY id DESC LIMIT 80");
-        List<Map<String, Object>> articles = jdbc.queryForList(
-                "SELECT id, title FROM knowledge_article ORDER BY id LIMIT 60");
-        List<Map<String, Object>> cats = jdbc.queryForList(
-                "SELECT id, name FROM ticket_category ORDER BY sort, id");
-        if (tickets.isEmpty() || articles.isEmpty() || cats.isEmpty()) {
+        List<Long> agentIds = jdbc.queryForList(
+                "SELECT id FROM sys_user WHERE role = 'AGENT' AND status = 1 ORDER BY id", Long.class);
+        if (agentIds.isEmpty()) {
             return;
         }
-
-        Random rnd = new Random(20260101L);
-        int added = 0;
-        for (int back = 29; back >= 0; back--) {
-            LocalDate day = LocalDate.now().minusDays(back);
-            LocalDateTime from = day.atStartOfDay();
-            Long existing = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM operation_log WHERE created_at >= ? AND created_at < ?",
-                    Long.class, from, from.plusDays(1));
-            int need = (4 + (back % 2)) - (existing == null ? 0 : existing.intValue());
-            for (int i = 0; i < need; i++) {
-                boolean login = rnd.nextInt(100) < 38;
-                boolean failed = rnd.nextInt(100) < 7;
-                LogTemplate tpl = login
-                        ? new LogTemplate(failed ? "LOGIN_FAILED" : "LOGIN", "USER",
-                        List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
-                        failed ? "登录失败：账号或密码错误" : "登录系统成功")
-                        : LOG_TEMPLATES.get(rnd.nextInt(LOG_TEMPLATES.size()));
-
-                Map<String, Object> op = pickOperator(byRole, tpl.roles(), users, rnd);
-                Map<String, Object> ticket = tickets.get(rnd.nextInt(tickets.size()));
-                Map<String, Object> article = articles.get(rnd.nextInt(articles.size()));
-                Map<String, Object> cat = cats.get(rnd.nextInt(cats.size()));
-                String ticketNo = String.valueOf(ticket.get("ticket_no"));
-                String agentName = String.valueOf(pickOperator(byRole, List.of("AGENT"), users, rnd).get("display_name"));
-                String userName = String.valueOf(users.get(rnd.nextInt(users.size())).get("display_name"));
-
-                String detail = tpl.detail()
-                        .replace("{ticket}", ticketNo + "「" + ticket.get("title") + "」")
-                        .replace("{article}", String.valueOf(article.get("title")))
-                        .replace("{category}", String.valueOf(cat.get("name")))
-                        .replace("{agent}", agentName)
-                        .replace("{user}", userName);
-                String targetId = switch (tpl.targetType()) {
-                    case "TICKET" -> ticketNo;
-                    case "ARTICLE" -> String.valueOf(article.get("id"));
-                    case "CATEGORY" -> String.valueOf(cat.get("name"));
-                    default -> String.valueOf(op.get("username"));
-                };
-                LocalDateTime at = day.atTime(8 + rnd.nextInt(13), rnd.nextInt(60), rnd.nextInt(60));
-                jdbc.update("INSERT INTO operation_log(operator_id,operator_name,role,action,target_type,target_id,detail,status,ip,created_at) " +
-                                "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        op.get("id"), op.get("display_name"), op.get("role"), tpl.action(), tpl.targetType(),
-                        targetId, detail, "LOGIN_FAILED".equals(tpl.action()) ? "FAILED" : "SUCCESS",
-                        DEMO_IPS[rnd.nextInt(DEMO_IPS.length)], at);
-                added++;
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id, status, assignee_id, created_at FROM ticket " +
+                        "WHERE status IN ('PENDING','ASSIGNED','PROCESSING','WAITING') " +
+                        "ORDER BY created_at DESC, id DESC LIMIT ?", need);
+        Random rnd = new Random(20260202L);
+        LocalDateTime now = LocalDateTime.now();
+        int done = 0;
+        for (Map<String, Object> row : rows) {
+            Long ticketId = ((Number) row.get("id")).longValue();
+            String status = text(row.get("status"));
+            Object assigneeObj = row.get("assignee_id");
+            Long assigneeId = assigneeObj == null ? null : ((Number) assigneeObj).longValue();
+            LocalDateTime createdAt = toDateTime(row.get("created_at"));
+            // 解决时间落在「创建之后、当前时刻之前」，且尽量在最近 7 天内
+            LocalDateTime lower = createdAt == null ? now.minusDays(3) : createdAt.plusMinutes(30);
+            if (!lower.isBefore(now)) {
+                lower = now.minusHours(2);
             }
+            long span = Duration.between(lower, now).getSeconds();
+            LocalDateTime resolvedAt = span > 0 ? lower.plusSeconds((long) (rnd.nextDouble() * span)) : now.minusHours(1);
+
+            if (assigneeId == null) {
+                assigneeId = agentIds.get(rnd.nextInt(agentIds.size()));
+                jdbc.update("UPDATE ticket SET assignee_id = ? WHERE id = ?", assigneeId, ticketId);
+                insertHistory(ticketId, assigneeId, "ASSIGN", "PENDING", "ASSIGNED", "工单已分派",
+                        (createdAt == null ? resolvedAt : createdAt).plusMinutes(5));
+            }
+            jdbc.update("UPDATE ticket SET status = 'RESOLVED', solution = ?, resolved_at = ?, updated_at = ? WHERE id = ?",
+                    SOLUTIONS[rnd.nextInt(SOLUTIONS.length)], resolvedAt, resolvedAt, ticketId);
+            insertHistory(ticketId, assigneeId, "RESOLVE", status, "RESOLVED", "提交解决方案", resolvedAt);
+            done++;
         }
-        if (added > 0) {
-            log.info("已补齐近 30 天操作日志演示数据 {} 条", added);
+        if (done > 0) {
+            log.info("已补充新解决工单 {} 张", done);
         }
     }
 
-    /** 从指定角色集合里随机取一个操作人，角色缺人时回落到全体用户 */
-    private Map<String, Object> pickOperator(Map<String, List<Map<String, Object>>> byRole,
-                                             List<String> roles, List<Map<String, Object>> all, Random rnd) {
-        List<Map<String, Object>> pool = new ArrayList<>();
-        for (String role : roles) {
-            List<Map<String, Object>> list = byRole.get(role);
-            if (list != null) {
-                pool.addAll(list);
+    /** 为已解决工单补充客户评价（星级 + 主观评语），覆盖率控制在 72% 左右，只处理未评价的 */
+    private void ensureEvaluations() {
+        long total = count("SELECT COUNT(*) FROM ticket WHERE status IN ('RESOLVED','CLOSED')");
+        if (total == 0) {
+            return;
+        }
+        long rated = count("SELECT COUNT(*) FROM ticket WHERE satisfaction IS NOT NULL");
+        int need = (int) Math.round(total * RATE_COVERAGE) - (int) rated;
+        if (need <= 0) {
+            return;
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id, customer_id, resolved_at, closed_at FROM ticket " +
+                        "WHERE status IN ('RESOLVED','CLOSED') AND satisfaction IS NULL " +
+                        "ORDER BY resolved_at DESC, id DESC LIMIT ?", need);
+        Random rnd = new Random(20260303L);
+        LocalDateTime now = LocalDateTime.now();
+        int done = 0;
+        for (Map<String, Object> row : rows) {
+            Long ticketId = ((Number) row.get("id")).longValue();
+            int rating = pickRating(rnd);
+            String[] pool = RATE_COMMENTS.get(rating);
+            String comment = pool[rnd.nextInt(pool.length)];
+            jdbc.update("UPDATE ticket SET satisfaction = ?, feedback = ? WHERE id = ?", rating, comment, ticketId);
+            // 评价发生在解决之后 0.5~8 小时内
+            LocalDateTime base = toDateTime(row.get("resolved_at"));
+            if (base == null) {
+                base = toDateTime(row.get("closed_at"));
+            }
+            LocalDateTime ratedAt = (base == null ? now.minusHours(3) : base).plusMinutes(30 + rnd.nextInt(450));
+            if (ratedAt.isAfter(now)) {
+                ratedAt = now.minusMinutes(5);
+            }
+            insertHistory(ticketId, row.get("customer_id"), "RATE", null, String.valueOf(rating), "客户评价", ratedAt);
+            done++;
+        }
+        if (done > 0) {
+            log.info("已补充客户评价 {} 条", done);
+        }
+    }
+
+    /** 按接近真实的分布挑一个星级：5 星 45%、4 星 33%、3 星 14%、2 星 5%、1 星 3% */
+    private int pickRating(Random rnd) {
+        int p = rnd.nextInt(100);
+        if (p < 45) {
+            return 5;
+        }
+        if (p < 78) {
+            return 4;
+        }
+        if (p < 92) {
+            return 3;
+        }
+        if (p < 97) {
+            return 2;
+        }
+        return 1;
+    }
+
+    /** 写一条工单流转历史 */
+    private void insertHistory(Long ticketId, Object operatorId, String action,
+                               String oldValue, String newValue, String remark, LocalDateTime at) {
+        jdbc.update("INSERT INTO ticket_history(ticket_id,operator_id,action,old_value,new_value,remark,created_at) " +
+                        "VALUES(?,?,?,?,?,?,?)",
+                ticketId, operatorId, action, oldValue, newValue, remark,
+                at == null ? LocalDateTime.now() : at);
+    }
+
+    /**
+     * 按真实业务数据重建操作日志：工单流转历史、工单回复、知识文章、用户与分类创建、登录记录。
+     * 这样日志里的每一条操作都能在业务表里找到对应实体（日志说关闭了某单，该单状态就是已关闭）。
+     * 通过 app_meta 标记保证只重建一次，之后运行期真实产生的日志不会被覆盖。
+     */
+    private void rebuildOperationLogs() {
+        long flag = count("SELECT COUNT(*) FROM app_meta WHERE k = ?", META_LOG_REBUILT);
+        if (flag > 0) {
+            return;
+        }
+        int removed = jdbc.update("DELETE FROM operation_log");
+        List<Object[]> rows = new ArrayList<>();
+        rows.addAll(logsFromTicketHistory());
+        rows.addAll(logsFromTicketReplies());
+        rows.addAll(logsFromArticles());
+        rows.addAll(logsFromAccounts());
+        rows.addAll(logsFromLogins());
+        if (!rows.isEmpty()) {
+            jdbc.batchUpdate("INSERT INTO operation_log(operator_id,operator_name,role,action,target_type,target_id," +
+                    "detail,status,ip,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", rows);
+        }
+        jdbc.update("INSERT INTO app_meta(k, v) VALUES(?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)",
+                META_LOG_REBUILT, String.valueOf(rows.size()));
+        log.info("操作日志已按真实业务数据重建 {} 条（清理旧演示记录 {} 条）", rows.size(), removed);
+    }
+
+    /** 工单流转历史 → 操作日志（时间、操作人、备注全部取自真实历史记录） */
+    private List<Object[]> logsFromTicketHistory() {
+        List<Object[]> rows = new ArrayList<>();
+        List<Map<String, Object>> list = jdbc.queryForList(
+                "SELECT h.action, h.remark, h.created_at, h.operator_id, t.ticket_no, " +
+                        "u.display_name, u.role FROM ticket_history h " +
+                        "JOIN ticket t ON t.id = h.ticket_id " +
+                        "LEFT JOIN sys_user u ON u.id = h.operator_id ORDER BY h.id");
+        for (Map<String, Object> m : list) {
+            String action = HISTORY_ACTION_MAP.get(text(m.get("action")));
+            if (action == null) {
+                continue;
+            }
+            rows.add(logRow(m.get("operator_id"), m.get("display_name"), m.get("role"), action,
+                    "TICKET", text(m.get("ticket_no")), text(m.get("remark")), toDateTime(m.get("created_at"))));
+        }
+        return rows;
+    }
+
+    /** 工单回复 → 操作日志（每张工单只取最后一条客服公开回复，避免日志被聊天刷屏） */
+    private List<Object[]> logsFromTicketReplies() {
+        List<Object[]> rows = new ArrayList<>();
+        List<Map<String, Object>> list = jdbc.queryForList(
+                "SELECT m.content, m.created_at, m.sender_id, t.ticket_no, u.display_name, u.role " +
+                        "FROM ticket_message m " +
+                        "JOIN (SELECT ticket_id, MAX(id) AS mid FROM ticket_message " +
+                        "      WHERE message_type = 'PUBLIC' GROUP BY ticket_id) x ON x.mid = m.id " +
+                        "JOIN ticket t ON t.id = m.ticket_id " +
+                        "JOIN sys_user u ON u.id = m.sender_id " +
+                        "WHERE u.role <> 'CUSTOMER' ORDER BY m.id");
+        for (Map<String, Object> m : list) {
+            String content = text(m.get("content"));
+            rows.add(logRow(m.get("sender_id"), m.get("display_name"), m.get("role"), "REPLY_TICKET",
+                    "TICKET", text(m.get("ticket_no")),
+                    "回复工单：" + (content.length() > 120 ? content.substring(0, 120) + "…" : content),
+                    toDateTime(m.get("created_at"))));
+        }
+        return rows;
+    }
+
+    /** 知识文章 → 新建 / 发布 / 更新日志（时间取自文章表真实的创建、发布、更新时间） */
+    private List<Object[]> logsFromArticles() {
+        List<Object[]> rows = new ArrayList<>();
+        List<Map<String, Object>> list = jdbc.queryForList(
+                "SELECT a.id, a.title, a.created_at, a.updated_at, a.published_at, " +
+                        "a.author_id, u.display_name, u.role FROM knowledge_article a " +
+                        "LEFT JOIN sys_user u ON u.id = a.author_id ORDER BY a.id");
+        for (Map<String, Object> m : list) {
+            String id = text(m.get("id"));
+            String title = text(m.get("title"));
+            LocalDateTime createdAt = toDateTime(m.get("created_at"));
+            LocalDateTime updatedAt = toDateTime(m.get("updated_at"));
+            LocalDateTime publishedAt = toDateTime(m.get("published_at"));
+            rows.add(logRow(m.get("author_id"), m.get("display_name"), m.get("role"), "CREATE_ARTICLE",
+                    "ARTICLE", id, "新建知识文章《" + title + "》", createdAt));
+            if (publishedAt != null) {
+                rows.add(logRow(m.get("author_id"), m.get("display_name"), m.get("role"), "PUBLISH_ARTICLE",
+                        "ARTICLE", id, "发布知识文章《" + title + "》", publishedAt));
+            }
+            boolean editedAfterCreate = createdAt != null && updatedAt != null
+                    && updatedAt.isAfter(createdAt.plusMinutes(1));
+            boolean editedAfterPublish = publishedAt == null || (updatedAt != null
+                    && updatedAt.isAfter(publishedAt.plusMinutes(1)));
+            if (editedAfterCreate && editedAfterPublish) {
+                rows.add(logRow(m.get("author_id"), m.get("display_name"), m.get("role"), "UPDATE_ARTICLE",
+                        "ARTICLE", id, "更新知识文章《" + title + "》", updatedAt));
             }
         }
-        List<Map<String, Object>> source = pool.isEmpty() ? all : pool;
-        return source.get(rnd.nextInt(source.size()));
+        return rows;
+    }
+
+    /** 用户与工单分类的创建记录 → 操作日志（操作人取最早的管理员） */
+    private List<Object[]> logsFromAccounts() {
+        List<Object[]> rows = new ArrayList<>();
+        Map<String, Object> admin = jdbc.queryForList(
+                "SELECT id, display_name, role FROM sys_user WHERE role = 'ADMIN' ORDER BY id LIMIT 1")
+                .stream().findFirst().orElse(Map.of());
+        Object adminId = admin.get("id");
+        Object adminName = admin.getOrDefault("display_name", "系统");
+        Object adminRole = admin.get("role");
+
+        for (Map<String, Object> m : jdbc.queryForList(
+                "SELECT username, display_name, role, created_at FROM sys_user ORDER BY id")) {
+            rows.add(logRow(adminId, adminName, adminRole, "CREATE_USER", "USER", text(m.get("username")),
+                    "新建用户 " + text(m.get("display_name")) + "（" + text(m.get("role")) + "）",
+                    toDateTime(m.get("created_at"))));
+        }
+        for (Map<String, Object> m : jdbc.queryForList(
+                "SELECT name, created_at FROM ticket_category ORDER BY id")) {
+            rows.add(logRow(adminId, adminName, adminRole, "CREATE_CATEGORY", "CATEGORY", text(m.get("name")),
+                    "新建工单分类「" + text(m.get("name")) + "」", toDateTime(m.get("created_at"))));
+        }
+        return rows;
+    }
+
+    /** 用户的最后登录时间 → 登录日志 */
+    private List<Object[]> logsFromLogins() {
+        List<Object[]> rows = new ArrayList<>();
+        for (Map<String, Object> m : jdbc.queryForList(
+                "SELECT id, username, display_name, role, last_login_at FROM sys_user " +
+                        "WHERE last_login_at IS NOT NULL ORDER BY id")) {
+            rows.add(logRow(m.get("id"), m.get("display_name"), m.get("role"), "LOGIN", "USER",
+                    text(m.get("username")), "登录系统成功", toDateTime(m.get("last_login_at"))));
+        }
+        return rows;
+    }
+
+    /** 组装一条操作日志的插入参数（系统尚未上线，IP 统一记本机回环） */
+    private Object[] logRow(Object operatorId, Object operatorName, Object role, String action,
+                            String targetType, String targetId, String detail, LocalDateTime at) {
+        String tid = targetId == null ? null : (targetId.length() > 64 ? targetId.substring(0, 64) : targetId);
+        String body = detail == null ? "" : (detail.length() > 1000 ? detail.substring(0, 999) + "…" : detail);
+        return new Object[]{operatorId, operatorName, role, action, targetType, tid, body,
+                "SUCCESS", "127.0.0.1", at == null ? LocalDateTime.now() : at};
+    }
+
+    /** 取字符串值，null 转空串 */
+    private static String text(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    /** 兼容 JdbcTemplate 返回的 Timestamp / LocalDateTime / Date */
+    private LocalDateTime toDateTime(Object value) {
+        if (value instanceof LocalDateTime t) {
+            return t;
+        }
+        if (value instanceof java.sql.Timestamp ts) {
+            return ts.toLocalDateTime();
+        }
+        if (value instanceof java.util.Date d) {
+            return new java.sql.Timestamp(d.getTime()).toLocalDateTime();
+        }
+        return null;
+    }
+
+    /** 单值计数，null 视为 0 */
+    private long count(String sql, Object... args) {
+        Long v = jdbc.queryForObject(sql, Long.class, args);
+        return v == null ? 0 : v;
     }
 }

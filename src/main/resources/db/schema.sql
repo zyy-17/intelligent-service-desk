@@ -179,3 +179,10 @@ CREATE TABLE IF NOT EXISTS ai_task_log (
     PRIMARY KEY (id),
     KEY idx_ai_created (created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 调用日志';
+
+CREATE TABLE IF NOT EXISTS app_meta (
+    k          VARCHAR(64)  NOT NULL COMMENT '配置键',
+    v          VARCHAR(255)          DEFAULT NULL COMMENT '配置值',
+    updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (k)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '应用级标记（一次性数据迁移用）';

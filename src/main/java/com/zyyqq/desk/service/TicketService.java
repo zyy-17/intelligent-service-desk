@@ -543,7 +543,7 @@ public class TicketService {
         auditService.ok("REOPEN_TICKET", "TICKET", t.getTicketNo(), "重新打开工单：" + truncateText(reason, 120));
     }
 
-    /** 客户评价工单（1-5 分，不可重复） */
+    /** 客户评价工单（1-5 星 + 主观评价，工单解决后才可评价且不可重复） */
     @Transactional
     public void rate(Long ticketId, int rating, String comment) {
         AuthContext.UserInfo u = AuthContext.require();
@@ -551,14 +551,23 @@ public class TicketService {
         if (!"CUSTOMER".equals(u.role()) || !t.getCustomerId().equals(u.id())) {
             throw BizException.forbidden("只有工单创建者可评价");
         }
+        if (!"RESOLVED".equals(t.getStatus()) && !"CLOSED".equals(t.getStatus())) {
+            throw new BizException("工单解决后才能评价");
+        }
         if (rating < 1 || rating > 5) {
             throw new BizException("评分范围 1-5");
         }
         if (t.getSatisfaction() != null) {
             throw new BizException("已评价，不可重复提交");
         }
-        jdbc.update("UPDATE ticket SET satisfaction = ?, feedback = ? WHERE id = ?", rating, comment, ticketId);
-        historyRepository.save(history(ticketId, u.id(), "RATE", null, String.valueOf(rating), "客户评价"));
+        // feedback 列长 500，超出截断避免插入失败
+        String text = comment == null ? "" : comment.trim();
+        if (text.length() > 500) {
+            text = text.substring(0, 500);
+        }
+        jdbc.update("UPDATE ticket SET satisfaction = ?, feedback = ? WHERE id = ?", rating, text, ticketId);
+        historyRepository.save(history(ticketId, u.id(), "RATE", null, String.valueOf(rating),
+                text.isBlank() ? "客户评价" : "客户评价：" + text));
         auditService.ok("RATE_TICKET", "TICKET", t.getTicketNo(), "客户评价 " + rating + " 星");
     }
 

@@ -30,6 +30,98 @@
       </div>
     </div>
 
+    <!-- 客户评价：概览指标 + 星级分布 + 客服排行 + 评价明细 -->
+    <div class="panel-card eval-panel">
+      <div class="panel-head">
+        <span class="panel-title">客户评价</span>
+        <span class="panel-sub">工单解决后由客户打分，满分 5 星</span>
+      </div>
+
+      <div class="eval-kpi">
+        <div class="eval-kpi-item" v-for="k in evalKpi" :key="k.label">
+          <div class="eval-kpi-value" :style="{ color: k.color }">{{ k.value }}</div>
+          <div class="eval-kpi-label">{{ k.label }}</div>
+        </div>
+      </div>
+
+      <div class="eval-body">
+        <div class="eval-dist">
+          <div class="dist-title">星级分布</div>
+          <div class="dist-row" v-for="d in evalDist" :key="d.rating">
+            <span class="dist-star">{{ d.rating }} 星</span>
+            <div class="dist-bar">
+              <i :style="{ width: distWidth(d.value), background: starColor(d.rating) }"></i>
+            </div>
+            <span class="dist-num">{{ d.value }}</span>
+          </div>
+        </div>
+        <div class="eval-agents">
+          <div class="dist-title">客服评价排行</div>
+          <el-table :data="evalAgents" size="small" stripe :max-height="212">
+            <el-table-column prop="name" label="客服" min-width="96" show-overflow-tooltip />
+            <el-table-column prop="rated" label="评价数" width="80" align="center" sortable />
+            <el-table-column prop="avg_rating" label="平均分" width="86" align="center" sortable>
+              <template #default="{ row }"><span class="star-text">{{ row.avg_rating }}</span></template>
+            </el-table-column>
+            <el-table-column prop="good_rate" label="好评率" width="86" align="center" sortable>
+              <template #default="{ row }">{{ row.good_rate }}%</template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!evalAgents.length" description="暂无评价数据" :image-size="60" />
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <el-date-picker v-model="evalQuery.range" type="daterange" unlink-panels
+                          value-format="YYYY-MM-DD" range-separator="至"
+                          start-placeholder="开始日期" end-placeholder="结束日期" style="width: 238px" />
+          <el-select v-model="evalQuery.rating" placeholder="星级：全部" clearable style="width: 118px">
+            <el-option v-for="s in [5, 4, 3, 2, 1]" :key="s" :label="s + ' 星'" :value="s" />
+          </el-select>
+          <el-select v-model="evalQuery.agentId" placeholder="处理客服" clearable style="width: 132px">
+            <el-option v-for="a in evalAgentOptions" :key="a.id" :label="a.name" :value="a.id" />
+          </el-select>
+          <el-input v-model="evalQuery.keyword" placeholder="工单号 / 主题 / 客户"
+                    :prefix-icon="Search" clearable style="width: 190px" @keyup.enter="searchEvals" />
+          <el-button type="primary" :icon="Search" @click="searchEvals">查询</el-button>
+          <el-button :icon="Refresh" @click="resetEvalFilter">重置</el-button>
+        </div>
+      </div>
+
+      <el-table :data="evalList" v-loading="loadingEvals" size="small" stripe>
+        <el-table-column prop="ticket_no" label="工单号" width="146" />
+        <el-table-column prop="title" label="工单主题" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="customer_name" label="客户" width="96" show-overflow-tooltip />
+        <el-table-column label="处理客服" width="98" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.agent_name || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="评分" width="132">
+          <template #default="{ row }">
+            <el-rate :model-value="row.rating" disabled size="small" />
+          </template>
+        </el-table-column>
+        <el-table-column label="评价内容" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span :class="{ muted: !row.comment }">{{ row.comment || '未填写评价内容' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="评价时间" width="146" align="center">
+          <template #default="{ row }">{{ fmtDate(row.rated_at) }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!loadingEvals && !evalList.length" description="暂无评价记录" :image-size="70" />
+
+      <div class="pager">
+        <span class="pager-total">共 {{ evalTotal }} 条</span>
+        <el-pagination background layout="prev, pager, next, sizes, jumper"
+                       :total="evalTotal" :page-size="evalPageSize" :current-page="evalPage"
+                       :page-sizes="[10, 20, 50]"
+                       @current-change="loadEvals"
+                       @size-change="s => { evalPageSize = s; loadEvals(1) }" />
+      </div>
+    </div>
+
     <!-- 团队绩效看板 -->
     <div class="panel-card team-panel">
       <div class="panel-head"><span class="panel-title">团队绩效</span></div>
@@ -88,7 +180,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { Search, Refresh } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import api from '../api'
 
@@ -107,6 +200,43 @@ const team = ref([])
 const kbKpi = ref([])
 const kbTop = ref([])
 
+// 客户评价
+const evalStats = ref({})
+const evalList = ref([])
+const evalTotal = ref(0)
+const evalPage = ref(1)
+const evalPageSize = ref(10)
+const loadingEvals = ref(false)
+const evalAgentOptions = ref([])
+const evalQuery = reactive({ range: null, rating: '', agentId: '', keyword: '' })
+
+/** 评价概览指标卡 */
+const evalKpi = computed(() => {
+  const d = evalStats.value || {}
+  return [
+    { label: '评价总数', value: d.total ?? 0, color: '#6366f1' },
+    { label: '平均评分', value: (d.avgRating ?? 0) + ' 分', color: '#f59e0b' },
+    { label: '好评率(4星+)', value: (d.goodRate ?? 0) + '%', color: '#22c55e' },
+    { label: '评价覆盖率', value: (d.coverRate ?? 0) + '%', color: '#06b6d4' }
+  ]
+})
+
+/** 星级分布（后端已按 5→1 排好，缺档补 0） */
+const evalDist = computed(() => evalStats.value.distribution || [])
+/** 客服评价排行 */
+const evalAgents = computed(() => evalStats.value.agents || [])
+
+/** 星级进度条宽度：以最高档为基准 */
+function distWidth(value) {
+  const max = Math.max(...evalDist.value.map(d => Number(d.value) || 0), 1)
+  return Math.round((Number(value) || 0) * 100 / max) + '%'
+}
+
+/** 星级对应颜色：5 星金、4 星绿、3 星蓝、2 星橙、1 星红 */
+function starColor(star) {
+  return { 5: '#f59e0b', 4: '#22c55e', 3: '#3b82f6', 2: '#fb923c', 1: '#ef4444' }[star] || '#94a3b8'
+}
+
 /* 时间格式化：只保留到分钟 */
 function fmtDate(t) { return t ? String(t).replace('T', ' ').substring(0, 16) : '—' }
 
@@ -123,8 +253,58 @@ async function load() {
   ]
   team.value = await api.get('/stats/team-performance')
   await loadKnowledge()
+  await loadEvaluations()
   await nextTick()
   renderCharts()
+}
+
+/** 加载客户评价：概览统计 + 明细列表 + 客服下拉 */
+async function loadEvaluations() {
+  await Promise.all([loadEvalStats(), loadEvalList(1)])
+  if (!evalAgentOptions.value.length) {
+    evalAgentOptions.value = await api.get('/evaluations/agents')
+  }
+}
+
+/** 评价概览统计 */
+async function loadEvalStats() {
+  try { evalStats.value = await api.get('/evaluations/stats') } catch (e) { /* 统计失败不影响明细 */ }
+}
+
+/** 评价明细分页 */
+async function loadEvalList(page = 1) {
+  loadingEvals.value = true
+  evalPage.value = page
+  try {
+    const [start, end] = evalQuery.range || []
+    const data = await api.get('/evaluations', {
+      params: {
+        page,
+        pageSize: evalPageSize.value,
+        rating: evalQuery.rating || undefined,
+        agentId: evalQuery.agentId || undefined,
+        keyword: evalQuery.keyword.trim() || undefined,
+        start: start || undefined,
+        end: end || undefined
+      }
+    })
+    evalList.value = data.list || []
+    evalTotal.value = data.total || 0
+  } finally {
+    loadingEvals.value = false
+  }
+}
+
+/** 点击查询 */
+function searchEvals() { loadEvalList(1); loadEvalStats() }
+
+/** 重置评价筛选 */
+function resetEvalFilter() {
+  evalQuery.range = null
+  evalQuery.rating = ''
+  evalQuery.agentId = ''
+  evalQuery.keyword = ''
+  searchEvals()
 }
 
 /* 加载知识库表现数据（浏览/收藏汇总 + Top 文章） */
@@ -216,4 +396,26 @@ onBeforeUnmount(() => {
 }
 .kb-kpi-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
 .kb-kpi-label { font-size: 12px; color: var(--text-sub); margin-top: 4px; }
+
+/* 客户评价：四宫格指标 + 星级分布 + 客服排行 + 明细表 */
+.eval-panel { padding: 16px; }
+.eval-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.eval-kpi-item {
+  background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px;
+  padding: 14px; text-align: center;
+}
+.eval-kpi-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.eval-kpi-label { font-size: 12px; color: var(--text-sub); margin-top: 4px; }
+.eval-body { display: grid; grid-template-columns: 1fr 1.2fr; gap: 22px; margin-bottom: 16px; }
+.dist-title { font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 10px; }
+.dist-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.dist-star { width: 38px; font-size: 12px; color: var(--text-sub); flex: none; }
+.dist-bar { flex: 1; height: 8px; background: #eef2f7; border-radius: 4px; overflow: hidden; }
+.dist-bar i { display: block; height: 100%; border-radius: 4px; transition: width .3s; }
+.dist-num { width: 36px; text-align: right; font-size: 12px; color: var(--text-sub); flex: none; }
+.star-text { color: #f59e0b; font-weight: 600; }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pager { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 2px; }
+.pager-total { font-size: 13px; color: var(--text-sub); }
 </style>
