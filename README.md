@@ -34,7 +34,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 - 📚 **知识库管理**：文章分类、编辑、审核、发布、热门排行、全文检索，支持**收藏**与按收藏量/浏览量/发布时间排序
 - 🤖 **AI 智能问答**：云端大模型（OpenAI 兼容）RAG + 知识库检索降级，支持多轮会话上下文
 - 📊 **数据统计**：状态 / 优先级 / 满意度分布、客服工作量、趋势图
-- ⚙️ **系统管理**：用户角色、工单分类、审计日志
+- ⚙️ **系统管理**：用户角色、工单分类、操作日志（全量审计 + 多维筛选 + CSV 导出）
 - ⏰ **演示定时任务**：可配置每天自动生成工单并模拟客服处理（默认关闭）
 - 🛡️ **安全防护**：JWT 认证、接口级 + 资源级权限校验、PBKDF2 密码哈希、内部备注隔离、接口限流、工单幂等
 
@@ -211,7 +211,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 ⚙️ 系统管理
    ├─ 用户管理        角色分布看板、新增/编辑用户、角色分配、批量启停、密码重置
    ├─ 工单分类        分类说明与图标配色、按名称/说明检索、启停、上下移动排序
-   └─ 审计日志        敏感操作留痕
+   └─ 操作日志        登录/工单/知识库/用户/分类全量留痕，按类型·人员·结果·日期筛选，结果可导出 CSV
 ```
 
 ---
@@ -330,7 +330,7 @@ intelligent-service-desk/
 | 7    | `knowledge_article`  | 知识文章表     | id, title, summary, body, category_id, keywords, status, view_count, published_at |
 | 8    | `knowledge_favorite` | 知识收藏表     | id, article_id, user_id（唯一键去重）, created_at              |
 | 9    | `notification`       | 通知表         | id, user_id, title, content, is_read                         |
-| 10   | `operation_log`      | 审计日志表     | id, operator_id, action, target, detail                      |
+| 10   | `operation_log`      | 操作日志表     | id, operator_id, operator_name, role, action, target_type, target_id, detail, status, ip, created_at |
 | 11   | `ai_task_log`        | AI 任务日志表  | id, task_id, task_type, status, created_at                   |
 
 ### 工单状态机
@@ -498,7 +498,8 @@ intelligent-service-desk/
 | PUT    | `/users/{id}/role`  | 分配角色           |
 | PUT    | `/users/{id}/password` | 重置密码        |
 | POST   | `/users/batch-status` | 批量启用/禁用    |
-| GET    | `/logs`             | 审计日志           |
+| GET    | `/logs`             | 操作日志（`category`/`operator`/`result`/`start`/`end` 可选筛选，`pageSize` 上限 2000 供导出） |
+| GET    | `/logs/stats`       | 操作日志概览（总数、今日、失败数、活跃操作人） |
 | GET    | `/categories`       | 工单分类列表（含说明、状态） |
 | POST   | `/categories`       | 新增分类           |
 | PUT    | `/categories/{id}/status` | 启用/停用分类 |
@@ -903,7 +904,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - JWT（HS256）认证，账号禁用后立即失效
 - 接口级角色校验（`@RequireRole`）+ 资源级权限校验（客户只能访问自己的工单）
 - 内部备注对客户接口完全隔离（后端过滤，非前端隐藏）
-- 敏感操作（禁用账号、改角色、改分类）写入审计日志
+- 操作日志统一由 `AuditService` 落库：自动取真实 IP（`X-Forwarded-For` → `X-Real-IP` → `remoteAddr`）与角色快照，
+  覆盖登录成功/失败、工单全流程、知识文章增改发布、用户与分类管理；登录失败等无登录态场景也能留痕
 - 登录失败 Redis 计数，15 分钟内失败 5 次临时锁定
 - 接口限流：登录 10 次/分钟/IP、AI 问答 20 次/分钟/用户，超限返回 429
 - 工单创建支持 `Idempotency-Key` 请求头防重复提交

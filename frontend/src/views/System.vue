@@ -195,20 +195,100 @@
 
       <!-- 审计日志 -->
       <el-tab-pane label="操作日志" name="logs">
-        <div class="panel-card table-panel">
-          <el-table :data="logs" stripe v-loading="loadingLogs" style="width: 100%">
-            <el-table-column prop="operator_name" label="操作人" width="120" />
-            <el-table-column prop="action" label="操作类型" width="160" />
-            <el-table-column prop="target_type" label="对象类型" width="110" />
-            <el-table-column prop="target_id" label="对象" width="120" />
-            <el-table-column prop="detail" label="详情" min-width="200" show-overflow-tooltip />
-            <el-table-column prop="created_at" label="时间" width="160">
+        <!-- 概览：总条数、今日操作、失败次数、活跃操作人 -->
+        <div class="stat-row log-stats">
+          <div class="stat-card" v-for="s in logStats" :key="s.key">
+            <div class="stat-icon" :style="{ background: s.bg, color: s.color }">
+              <el-icon :size="19"><component :is="s.icon" /></el-icon>
+            </div>
+            <div class="stat-body">
+              <div class="stat-label">{{ s.label }}</div>
+              <div class="stat-value">{{ s.value }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-card log-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <el-date-picker v-model="logQuery.range" type="daterange" unlink-panels
+                              value-format="YYYY-MM-DD" range-separator="至"
+                              start-placeholder="开始日期" end-placeholder="结束日期"
+                              style="width: 250px" />
+              <el-select v-model="logQuery.category" placeholder="操作类型" clearable style="width: 138px">
+                <el-option v-for="c in LOG_CATEGORIES" :key="c.value" :label="c.label" :value="c.value" />
+              </el-select>
+              <el-select v-model="logQuery.result" placeholder="执行结果" clearable style="width: 112px">
+                <el-option label="成功" value="SUCCESS" />
+                <el-option label="失败" value="FAILED" />
+              </el-select>
+              <el-input v-model="logQuery.operator" placeholder="操作人 / 姓名 / 账号"
+                        :prefix-icon="Search" clearable style="width: 190px" @keyup.enter="searchLogs" />
+              <el-button type="primary" :icon="Search" @click="searchLogs">查询</el-button>
+              <el-button :icon="Refresh" @click="resetLogFilter">重置</el-button>
+            </div>
+            <div class="toolbar-right">
+              <el-button :icon="Download" :loading="exporting" @click="exportLogs">导出 CSV</el-button>
+            </div>
+          </div>
+
+          <el-table :data="logs" v-loading="loadingLogs" style="width: 100%">
+            <el-table-column prop="id" label="ID" width="66" />
+            <el-table-column label="操作人" width="184">
+              <template #default="{ row }">
+                <div class="op-cell">
+                  <div class="avatar" :style="{ background: logAvatarBg(row) }">{{ logInitial(row) }}</div>
+                  <div class="op-text">
+                    <div class="op-name">{{ row.operator_name || '—' }}</div>
+                    <div class="op-role">{{ roleOf(row.role || row.current_role).label }}</div>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作类型" width="132">
+              <template #default="{ row }">
+                <span class="act-tag" :style="{ color: actionOf(row.action).color, background: actionOf(row.action).bg }">
+                  {{ actionOf(row.action).label }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作对象" width="168" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="mono">{{ row.target_id || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="对象类型" width="104">
+              <template #default="{ row }">
+                <span class="obj-type">{{ targetTypeLabel(row.target_type) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="detail" label="操作内容" min-width="250" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.detail || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="执行结果" width="98">
+              <template #default="{ row }">
+                <span class="result-tag" :class="row.status === 'FAILED' ? 'is-fail' : 'is-ok'">
+                  <i class="result-dot"></i>{{ row.status === 'FAILED' ? '失败' : '成功' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="ip" label="IP 地址" width="132">
+              <template #default="{ row }">
+                <span class="mono">{{ row.ip || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作时间" width="158">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>
           </el-table>
+
           <div class="pager">
-            <el-pagination background layout="total, prev, pager, next" :total="logTotal"
-                           :page-size="10" :current-page="logPage" @current-change="loadLogs" />
+            <span class="pager-total">共 {{ logTotal }} 条</span>
+            <el-pagination background layout="prev, pager, next, sizes, jumper"
+                           :total="logTotal" :page-size="logPageSize"
+                           :current-page="logPage" :page-sizes="[10, 20, 50]"
+                           @current-change="loadLogs"
+                           @size-change="s => { logPageSize = s; loadLogs(1) }" />
           </div>
         </div>
       </el-tab-pane>
@@ -309,7 +389,7 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Refresh, MoreFilled, Edit,
+  Plus, Search, Refresh, MoreFilled, Edit, Download,
   UserFilled, Medal, Avatar, Headset, User,
   Promotion, Setting, Money, ChatDotRound, Warning, Collection
 } from '@element-plus/icons-vue'
@@ -323,7 +403,10 @@ const loadingCategories = ref(false)
 const logs = ref([])
 const loadingLogs = ref(false)
 const logPage = ref(1)
+const logPageSize = ref(10)
 const logTotal = ref(0)
+const logStatData = ref({})
+const exporting = ref(false)
 const aiLogs = ref([])
 const loadingAiLogs = ref(false)
 const aiLogPage = ref(1)
@@ -339,6 +422,9 @@ const selectedIds = ref([])
 const catQuery = reactive({ keyword: '', status: '', sort: 'default' })
 const catPage = ref(1)
 const catPageSize = ref(10)
+
+// 操作日志的筛选条件（服务端过滤，改动后点「查询」生效）
+const logQuery = reactive({ range: null, category: '', result: '', operator: '' })
 
 const userVisible = ref(false)
 const savingUser = ref(false)
@@ -362,6 +448,91 @@ const ROLES = [
 /** 取角色元数据，未知角色回落到客户样式 */
 function roleOf(role) {
   return ROLES.find(r => r.value === role) || ROLES[3]
+}
+
+/** 操作类型元数据：中文标签 + 标签配色，未收录的英文码原样显示 */
+const ACTIONS = {
+  // 登录认证
+  LOGIN: { label: '登录系统', color: '#2563eb', bg: 'rgba(37,99,235,.10)' },
+  LOGIN_FAILED: { label: '登录失败', color: '#dc2626', bg: 'rgba(220,38,38,.10)' },
+  REGISTER: { label: '注册账号', color: '#0d9488', bg: 'rgba(13,148,136,.10)' },
+  CHANGE_PASSWORD: { label: '修改密码', color: '#7c3aed', bg: 'rgba(124,58,237,.10)' },
+  UPDATE_PROFILE: { label: '修改资料', color: '#64748b', bg: 'rgba(100,116,139,.12)' },
+  UPDATE_AVATAR: { label: '更新头像', color: '#64748b', bg: 'rgba(100,116,139,.12)' },
+  // 工单流转
+  CREATE_TICKET: { label: '创建工单', color: '#2563eb', bg: 'rgba(37,99,235,.10)' },
+  APPLY_TICKET: { label: '申请接单', color: '#d97706', bg: 'rgba(217,119,6,.12)' },
+  REVIEW_TICKET: { label: '审核申请', color: '#8b5cf6', bg: 'rgba(139,92,246,.10)' },
+  ASSIGN_TICKET: { label: '分配工单', color: '#4f46e5', bg: 'rgba(79,70,229,.10)' },
+  ACCEPT_TICKET: { label: '受理工单', color: '#0891b2', bg: 'rgba(8,145,178,.10)' },
+  REPLY_TICKET: { label: '回复工单', color: '#16a34a', bg: 'rgba(22,163,74,.10)' },
+  RESOLVE_TICKET: { label: '提交方案', color: '#16a34a', bg: 'rgba(22,163,74,.10)' },
+  CONFIRM_TICKET: { label: '确认结果', color: '#0d9488', bg: 'rgba(13,148,136,.10)' },
+  CLOSE_TICKET: { label: '关闭工单', color: '#64748b', bg: 'rgba(100,116,139,.12)' },
+  REOPEN_TICKET: { label: '重开工单', color: '#ea580c', bg: 'rgba(234,88,12,.10)' },
+  RATE_TICKET: { label: '客户评价', color: '#ca8a04', bg: 'rgba(202,138,4,.12)' },
+  URGE_TICKET: { label: '客户催办', color: '#dc2626', bg: 'rgba(220,38,38,.10)' },
+  // 知识库
+  CREATE_ARTICLE: { label: '新建文章', color: '#2563eb', bg: 'rgba(37,99,235,.10)' },
+  UPDATE_ARTICLE: { label: '更新文章', color: '#4f46e5', bg: 'rgba(79,70,229,.10)' },
+  PUBLISH_ARTICLE: { label: '发布文章', color: '#16a34a', bg: 'rgba(22,163,74,.10)' },
+  DELETE_ARTICLE: { label: '删除文章', color: '#dc2626', bg: 'rgba(220,38,38,.10)' },
+  // 用户管理
+  CREATE_USER: { label: '新增用户', color: '#2563eb', bg: 'rgba(37,99,235,.10)' },
+  UPDATE_USER: { label: '编辑用户', color: '#4f46e5', bg: 'rgba(79,70,229,.10)' },
+  UPDATE_USER_STATUS: { label: '启停账号', color: '#d97706', bg: 'rgba(217,119,6,.12)' },
+  BATCH_USER_STATUS: { label: '批量启停', color: '#d97706', bg: 'rgba(217,119,6,.12)' },
+  UPDATE_USER_ROLE: { label: '调整角色', color: '#8b5cf6', bg: 'rgba(139,92,246,.10)' },
+  RESET_PASSWORD: { label: '重置密码', color: '#dc2626', bg: 'rgba(220,38,38,.10)' },
+  // 分类管理
+  CREATE_CATEGORY: { label: '新建分类', color: '#2563eb', bg: 'rgba(37,99,235,.10)' },
+  UPDATE_CATEGORY: { label: '更新分类', color: '#4f46e5', bg: 'rgba(79,70,229,.10)' },
+  UPDATE_CATEGORY_STATUS: { label: '启停分类', color: '#d97706', bg: 'rgba(217,119,6,.12)' },
+  DELETE_CATEGORY: { label: '删除分类', color: '#dc2626', bg: 'rgba(220,38,38,.10)' }
+}
+
+/** 取操作类型元数据，未收录的英文码原样降级显示 */
+function actionOf(action) {
+  return ACTIONS[action] || { label: action || '—', color: '#64748b', bg: 'rgba(100,116,139,.12)' }
+}
+
+/** 操作日志类型筛选项（对应后端 ACTION_GROUPS） */
+const LOG_CATEGORIES = [
+  { value: 'AUTH', label: '登录认证' },
+  { value: 'TICKET', label: '工单流转' },
+  { value: 'KNOWLEDGE', label: '知识库' },
+  { value: 'USER', label: '用户管理' },
+  { value: 'CATEGORY', label: '分类管理' }
+]
+
+/** 对象类型中文名 */
+const TARGET_TYPES = { USER: '用户', TICKET: '工单', ARTICLE: '知识文章', CATEGORY: '工单分类' }
+
+/** 取对象类型中文名 */
+function targetTypeLabel(type) {
+  return TARGET_TYPES[type] || (type || '—')
+}
+
+/** 日志概览统计卡 */
+const logStats = computed(() => {
+  const d = logStatData.value || {}
+  return [
+    { key: 'total', label: '日志总数', value: d.total || 0, icon: Collection, color: '#3b82f6', bg: 'rgba(59,130,246,.10)' },
+    { key: 'today', label: '今日操作', value: d.today || 0, icon: Promotion, color: '#10b981', bg: 'rgba(16,185,129,.10)' },
+    { key: 'failed', label: '失败操作', value: d.failed || 0, icon: Warning, color: '#ef4444', bg: 'rgba(239,68,68,.10)' },
+    { key: 'operators', label: '活跃操作人', value: d.operators || 0, icon: UserFilled, color: '#8b5cf6', bg: 'rgba(139,92,246,.10)' }
+  ]
+})
+
+/** 日志操作人头像底色：优先当前用户头像色，其次按角色色 */
+function logAvatarBg(row) {
+  return row.avatar_color || roleOf(row.role || row.current_role).color
+}
+
+/** 日志操作人头像文字 */
+function logInitial(row) {
+  const name = String(row.operator_name || '?').trim()
+  return name ? name.charAt(0).toUpperCase() : '?'
 }
 
 /** 统计卡：总数 + 各角色人数 */
@@ -472,14 +643,100 @@ async function loadCategories() {
   try { categories.value = await api.get('/admin/categories') } finally { loadingCategories.value = false }
 }
 
+/** 把当前日志筛选条件转成请求参数 */
+function logParams(extra = {}) {
+  const [start, end] = logQuery.range || []
+  return {
+    category: logQuery.category || undefined,
+    result: logQuery.result || undefined,
+    operator: logQuery.operator.trim() || undefined,
+    start: start || undefined,
+    end: end || undefined,
+    ...extra
+  }
+}
+
+/** 分页加载操作日志 */
 async function loadLogs(page = 1) {
   loadingLogs.value = true
   logPage.value = page
   try {
-    const data = await api.get('/admin/logs', { params: { page, pageSize: 10 } })
+    const data = await api.get('/admin/logs', { params: logParams({ page, pageSize: logPageSize.value }) })
     logs.value = data.list || []
-    logTotal.value = data.total
+    logTotal.value = data.total || 0
   } finally { loadingLogs.value = false }
+}
+
+/** 加载日志概览统计 */
+async function loadLogStats() {
+  try { logStatData.value = await api.get('/admin/logs/stats') } catch (e) { /* 统计失败不影响列表 */ }
+}
+
+/** 点击查询：回到第一页并刷新统计 */
+function searchLogs() {
+  loadLogs(1)
+  loadLogStats()
+}
+
+/** 重置筛选条件 */
+function resetLogFilter() {
+  logQuery.range = null
+  logQuery.category = ''
+  logQuery.result = ''
+  logQuery.operator = ''
+  searchLogs()
+}
+
+/** 导出当前筛选结果为 CSV（UTF-8 BOM，Excel 双击打开不乱码） */
+async function exportLogs() {
+  exporting.value = true
+  try {
+    // 一次最多取 2000 条（与后端上限一致），覆盖演示与常规审计场景
+    const data = await api.get('/admin/logs', { params: logParams({ page: 1, pageSize: 2000 }) })
+    const rows = data.list || []
+    if (!rows.length) {
+      ElMessage.warning('当前筛选条件下没有可导出的日志')
+      return
+    }
+    const header = ['ID', '操作人', '角色', '操作类型', '对象类型', '操作对象', '操作内容', '执行结果', 'IP 地址', '操作时间']
+    const lines = [header]
+    rows.forEach(r => {
+      lines.push([
+        r.id,
+        r.operator_name || '',
+        roleOf(r.role || r.current_role).label,
+        actionOf(r.action).label,
+        targetTypeLabel(r.target_type),
+        r.target_id || '',
+        r.detail || '',
+        r.status === 'FAILED' ? '失败' : '成功',
+        r.ip || '',
+        fmtTime(r.created_at)
+      ])
+    })
+    const csv = lines.map(line => line.map(csvCell).join(',')).join('\r\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `操作日志_${stamp}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success(`已导出 ${rows.length} 条日志`)
+  } catch (e) {
+    /* 拦截器已提示 */
+  } finally {
+    exporting.value = false
+  }
+}
+
+/** CSV 单元格转义：含逗号/引号/换行时用双引号包裹，内部引号翻倍 */
+function csvCell(value) {
+  const text = value == null ? '' : String(value)
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
 async function loadAiLogs(page = 1) {
@@ -675,6 +932,7 @@ onMounted(() => {
   loadUsers()
   loadCategories()
   loadLogs(1)
+  loadLogStats()
   loadAiLogs(1)
 })
 </script>
@@ -752,10 +1010,31 @@ onMounted(() => {
 
 .form-hint { margin-left: 8px; font-size: 12px; color: var(--text-muted); }
 
+/* 操作日志：概览 4 张卡 + 表格卡 */
+.log-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.log-panel { padding: 18px 18px 8px; }
+.op-cell { display: flex; align-items: center; gap: 10px; }
+.op-text { min-width: 0; }
+.op-name { font-size: 13px; color: var(--text-main); line-height: 1.35; }
+.op-role { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.act-tag {
+  display: inline-flex; align-items: center;
+  padding: 2px 9px; border-radius: 6px;
+  font-size: 12px; line-height: 18px; white-space: nowrap;
+}
+.obj-type { font-size: 12px; color: var(--text-sub); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--text-sub); }
+.result-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.result-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.result-tag.is-ok { color: var(--success); }
+.result-tag.is-fail { color: var(--danger); }
+
 @media (max-width: 1280px) {
   .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .log-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 960px) {
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .log-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

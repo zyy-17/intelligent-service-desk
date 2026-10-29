@@ -35,16 +35,19 @@ public class TicketService {
     private final UserRepository userRepository;
     private final KnowledgeArticleRepository articleRepository;
     private final JdbcTemplate jdbc;
+    private final AuditService auditService;
 
     public TicketService(TicketRepository ticketRepository, TicketMessageRepository messageRepository,
                          TicketHistoryRepository historyRepository, UserRepository userRepository,
-                         KnowledgeArticleRepository articleRepository, JdbcTemplate jdbc) {
+                         KnowledgeArticleRepository articleRepository, JdbcTemplate jdbc,
+                         AuditService auditService) {
         this.ticketRepository = ticketRepository;
         this.messageRepository = messageRepository;
         this.historyRepository = historyRepository;
         this.userRepository = userRepository;
         this.articleRepository = articleRepository;
         this.jdbc = jdbc;
+        this.auditService = auditService;
     }
 
     /** 分页查询工单（支持状态与关键字过滤；客户角色仅能查到本人提交的工单） */
@@ -151,6 +154,8 @@ public class TicketService {
         }
         jdbc.update("UPDATE ticket SET status = 'PENDING_REVIEW' WHERE id = ?", ticketId);
         historyRepository.save(history(ticketId, u.id(), "APPLY", "PENDING", "PENDING_REVIEW", "申请负责处理该工单"));
+        auditService.ok("APPLY_TICKET", "TICKET", t.getTicketNo(),
+                "申请处理工单「" + t.getTitle() + "」");
         for (Long uid : reviewerIds()) {
             addNotification(uid, "REVIEW", "工单申请待审核",
                     "客服「" + u.displayName() + "」申请处理工单 " + t.getTicketNo() + "「" + t.getTitle() + "」，请审核", ticketId);
@@ -199,6 +204,9 @@ public class TicketService {
                 ticketId, u.id());
         // 申请人那条「等待审核」提醒随之置为已读（结果由「新指派 / 申请被驳回」通知承载）
         jdbc.update("UPDATE notification SET is_read = 1 WHERE ticket_id = ? AND type = 'REVIEW_APPLIED' AND is_read = 0", ticketId);
+        auditService.ok("REVIEW_TICKET", "TICKET", t.getTicketNo(),
+                (approve ? "审核通过，工单分配给申请人" : "审核驳回，退回待分配")
+                        + (remark == null || remark.isBlank() ? "" : "，备注：" + remark));
     }
 
     /** 待审核工单数量（仅主管/管理员使用，用于工单管理页与导航提示） */
@@ -386,6 +394,8 @@ public class TicketService {
         Ticket saved = ticketRepository.save(t);
 
         historyRepository.save(history(saved.getId(), u.id(), "CREATE", null, "PENDING", "客户创建工单"));
+        auditService.ok("CREATE_TICKET", "TICKET", saved.getTicketNo(),
+                "创建工单「" + saved.getTitle() + "」，优先级 " + priority);
         return Map.of("id", saved.getId(), "ticketNo", saved.getTicketNo());
     }
 
@@ -415,6 +425,16 @@ public class TicketService {
         if ("PUBLIC".equals(messageType) && !"CUSTOMER".equals(u.role()) && t.getFirstResponseAt() == null) {
             jdbc.update("UPDATE ticket SET first_response_at = ? WHERE id = ?", LocalDateTime.now(), ticketId);
         }
+        auditService.ok("REPLY_TICKET", "TICKET", t.getTicketNo(),
+                ("INTERNAL".equals(messageType) ? "添加内部备注：" : "回复工单：") + truncateText(content, 120));
+    }
+
+    /** 文本截断到指定长度，超出补省略号（日志详情用） */
+    private static String truncateText(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "…";
     }
 
     /** 分配/转派工单给客服 */
@@ -429,6 +449,17 @@ public class TicketService {
         ticketRepository.updateStatusAndAssignee(ticketId, "ASSIGNED", assigneeId);
         historyRepository.save(history(ticketId, u.id(), "ASSIGN", old, String.valueOf(assigneeId), "分配/转派工单"));
         addNotification(assigneeId, "工单分配", "您有一个新的工单待处理", ticketId);
+        auditService.ok("ASSIGN_TICKET", "TICKET", t.getTicketNo(), "分配/转派工单给 " + assigneeName(assigneeId));
+    }
+
+    /** 查询用户显示名，查不到时回落到 ID 文本（审计日志用） */
+    private String assigneeName(Long userId) {
+        try {
+            String name = jdbc.queryForObject("SELECT display_name FROM sys_user WHERE id = ?", String.class, userId);
+            return name == null ? String.valueOf(userId) : name;
+        } catch (Exception e) {
+            return String.valueOf(userId);
+        }
     }
 
     /** 客服接单（仅分配给自己） */
@@ -441,6 +472,7 @@ public class TicketService {
         }
         ticketRepository.updateStatus(ticketId, "PROCESSING");
         historyRepository.save(history(ticketId, u.id(), "ACCEPT", "ASSIGNED", "PROCESSING", "客服接单"));
+        auditService.ok("ACCEPT_TICKET", "TICKET", t.getTicketNo(), "受理工单「" + t.getTitle() + "」");
     }
 
     /** 提交解决方案（工单进入待确认） */
@@ -454,6 +486,8 @@ public class TicketService {
         jdbc.update("UPDATE ticket SET status = 'WAITING', solution = ? WHERE id = ?", solution, ticketId);
         historyRepository.save(history(ticketId, u.id(), "RESOLVE", t.getStatus(), "WAITING", "提交解决方案"));
         addNotification(t.getCustomerId(), "工单待确认", "您的工单已有解决方案，请确认", ticketId);
+        auditService.ok("RESOLVE_TICKET", "TICKET", t.getTicketNo(),
+                "提交解决方案：" + truncateText(solution, 120));
     }
 
     /** 客户确认解决方案（已解决则关闭，未解决则重开） */
@@ -475,6 +509,8 @@ public class TicketService {
             jdbc.update("UPDATE ticket SET status = 'PROCESSING' WHERE id = ?", ticketId);
             historyRepository.save(history(ticketId, u.id(), "REOPEN", "WAITING", "PROCESSING", "客户反馈未解决：" + feedback));
         }
+        auditService.ok("CONFIRM_TICKET", "TICKET", t.getTicketNo(),
+                solved ? "客户确认已解决" : "客户反馈未解决：" + truncateText(feedback, 120));
     }
 
     /** 关闭已解决工单 */
@@ -487,6 +523,7 @@ public class TicketService {
         }
         jdbc.update("UPDATE ticket SET status = 'CLOSED', closed_at = ? WHERE id = ?", LocalDateTime.now(), ticketId);
         historyRepository.save(history(ticketId, u.id(), "CLOSE", "RESOLVED", "CLOSED", "关闭工单"));
+        auditService.ok("CLOSE_TICKET", "TICKET", t.getTicketNo(), "关闭工单「" + t.getTitle() + "」");
     }
 
     /** 重新打开已关闭工单 */
@@ -503,6 +540,7 @@ public class TicketService {
         int cnt = t.getReopenCount() == null ? 1 : t.getReopenCount() + 1;
         jdbc.update("UPDATE ticket SET status = 'PROCESSING', reopen_count = ? WHERE id = ?", cnt, ticketId);
         historyRepository.save(history(ticketId, u.id(), "REOPEN", "CLOSED", "PROCESSING", "重新打开：" + reason));
+        auditService.ok("REOPEN_TICKET", "TICKET", t.getTicketNo(), "重新打开工单：" + truncateText(reason, 120));
     }
 
     /** 客户评价工单（1-5 分，不可重复） */
@@ -521,6 +559,7 @@ public class TicketService {
         }
         jdbc.update("UPDATE ticket SET satisfaction = ?, feedback = ? WHERE id = ?", rating, comment, ticketId);
         historyRepository.save(history(ticketId, u.id(), "RATE", null, String.valueOf(rating), "客户评价"));
+        auditService.ok("RATE_TICKET", "TICKET", t.getTicketNo(), "客户评价 " + rating + " 星");
     }
 
     /** 客户催办未结束工单，通知处理人 */
@@ -541,6 +580,8 @@ public class TicketService {
         if (t.getAssigneeId() != null) {
             addNotification(t.getAssigneeId(), "工单催办", "您有工单被客户催办，请尽快处理", ticketId);
         }
+        auditService.ok("URGE_TICKET", "TICKET", t.getTicketNo(),
+                "客户催办" + (reason == null || reason.isBlank() ? "" : "：" + truncateText(reason, 100)));
     }
 
     /** 查询可分配的客服列表 */

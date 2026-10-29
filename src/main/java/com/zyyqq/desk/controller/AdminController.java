@@ -2,7 +2,6 @@ package com.zyyqq.desk.controller;
 
 import com.zyyqq.desk.common.ApiResponse;
 import com.zyyqq.desk.common.PageResult;
-import com.zyyqq.desk.entity.OperationLog;
 import com.zyyqq.desk.security.RequireRole;
 import com.zyyqq.desk.service.AdminService;
 import org.springframework.web.bind.annotation.*;
@@ -90,11 +89,22 @@ public class AdminController {
         return ApiResponse.ok(adminService.batchUpdateStatus(ids, status));
     }
 
-    /** 操作审计日志分页 */
+    /** 操作审计日志分页（支持类型分组、操作人、结果、日期范围筛选） */
     @GetMapping("/logs")
-    public ApiResponse<PageResult<OperationLog>> logs(@RequestParam(defaultValue = "1") int page,
-                                                      @RequestParam(defaultValue = "10") int pageSize) {
-        return ApiResponse.ok(adminService.logs(page, pageSize));
+    public ApiResponse<PageResult<Map<String, Object>>> logs(@RequestParam(defaultValue = "1") int page,
+                                                             @RequestParam(defaultValue = "10") int pageSize,
+                                                             @RequestParam(required = false) String category,
+                                                             @RequestParam(required = false) String operator,
+                                                             @RequestParam(required = false) String result,
+                                                             @RequestParam(required = false) String start,
+                                                             @RequestParam(required = false) String end) {
+        return ApiResponse.ok(adminService.logs(page, pageSize, category, operator, result, start, end));
+    }
+
+    /** 操作日志概览统计（顶部统计卡） */
+    @GetMapping("/logs/stats")
+    public ApiResponse<Map<String, Object>> logStats() {
+        return ApiResponse.ok(adminService.logStats());
     }
 
     /** AI 调用日志分页 */

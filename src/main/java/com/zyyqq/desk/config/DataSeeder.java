@@ -97,6 +97,7 @@ public class DataSeeder implements CommandLineRunner {
         ensureKnowledge();
         ensureFavorites();
         ensureRecentTickets();
+        ensureOperationLogs();
     }
 
     /** 初始化用户、分类、知识、工单与通知 */
@@ -674,5 +675,130 @@ public class DataSeeder implements CommandLineRunner {
             }
         }
         return items[items.length - 1];
+    }
+
+    /** 演示日志模板：动作、对象类型、允许操作的角色、详情文案（{ticket} 等占位符在生成时替换） */
+    private record LogTemplate(String action, String targetType, List<String> roles, String detail) {
+    }
+
+    /** 操作日志模板池（登录按高频单独处理，不进池） */
+    private static final List<LogTemplate> LOG_TEMPLATES = List.of(
+            new LogTemplate("CHANGE_PASSWORD", "USER", List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"), "修改登录密码"),
+            new LogTemplate("UPDATE_PROFILE", "USER", List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"), "修改个人资料"),
+            new LogTemplate("CREATE_TICKET", "TICKET", List.of("CUSTOMER"), "创建工单 {ticket}"),
+            new LogTemplate("URGE_TICKET", "TICKET", List.of("CUSTOMER"), "客户催办 {ticket}"),
+            new LogTemplate("RATE_TICKET", "TICKET", List.of("CUSTOMER"), "客户评价 5 星 {ticket}"),
+            new LogTemplate("ACCEPT_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR"), "受理工单 {ticket}"),
+            new LogTemplate("REPLY_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR", "ADMIN"), "回复工单 {ticket}"),
+            new LogTemplate("RESOLVE_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR"), "提交解决方案，工单转入待确认 {ticket}"),
+            new LogTemplate("CLOSE_TICKET", "TICKET", List.of("AGENT", "SUPERVISOR", "ADMIN"), "关闭工单 {ticket}"),
+            new LogTemplate("ASSIGN_TICKET", "TICKET", List.of("ADMIN", "SUPERVISOR"), "分配/转派工单 {ticket} 给 {agent}"),
+            new LogTemplate("APPLY_TICKET", "TICKET", List.of("AGENT"), "申请处理工单 {ticket}"),
+            new LogTemplate("REVIEW_TICKET", "TICKET", List.of("ADMIN", "SUPERVISOR"), "审核接单申请 {ticket}"),
+            new LogTemplate("PUBLISH_ARTICLE", "ARTICLE", List.of("ADMIN", "SUPERVISOR"), "发布知识文章《{article}》"),
+            new LogTemplate("UPDATE_ARTICLE", "ARTICLE", List.of("ADMIN", "SUPERVISOR"), "更新知识文章《{article}》"),
+            new LogTemplate("CREATE_USER", "USER", List.of("ADMIN"), "新建用户 {user}"),
+            new LogTemplate("UPDATE_USER", "USER", List.of("ADMIN"), "编辑用户资料 {user}"),
+            new LogTemplate("UPDATE_USER_STATUS", "USER", List.of("ADMIN"), "禁用账号 {user}"),
+            new LogTemplate("RESET_PASSWORD", "USER", List.of("ADMIN"), "重置用户密码 {user}"),
+            new LogTemplate("CREATE_CATEGORY", "CATEGORY", List.of("ADMIN"), "新建工单分类 {category}"),
+            new LogTemplate("UPDATE_CATEGORY", "CATEGORY", List.of("ADMIN"), "更新分类 SLA 配置 {category}")
+    );
+
+    /** 演示日志使用的内网 / 办公网 IP 池 */
+    private static final String[] DEMO_IPS = {
+            "127.0.0.1", "192.168.1.23", "192.168.1.87", "192.168.3.15", "192.168.3.64",
+            "10.0.12.31", "10.0.12.108", "10.0.8.42", "172.16.5.19", "172.16.5.77",
+            "203.0.113.24", "203.0.113.156", "198.51.100.31"
+    };
+
+    /**
+     * 近 30 天操作日志演示数据：每天补齐到 4~5 条，当天已有记录则跳过，
+     * 因此重复启动不会重复插入，真实操作产生的日志也不会被覆盖。
+     */
+    private void ensureOperationLogs() {
+        List<Map<String, Object>> users = jdbc.queryForList(
+                "SELECT id, username, display_name, role FROM sys_user WHERE status = 1 ORDER BY id");
+        if (users.isEmpty()) {
+            return;
+        }
+        Map<String, List<Map<String, Object>>> byRole = new LinkedHashMap<>();
+        for (Map<String, Object> u : users) {
+            byRole.computeIfAbsent(String.valueOf(u.get("role")), k -> new ArrayList<>()).add(u);
+        }
+        List<Map<String, Object>> tickets = jdbc.queryForList(
+                "SELECT ticket_no, title FROM ticket ORDER BY id DESC LIMIT 80");
+        List<Map<String, Object>> articles = jdbc.queryForList(
+                "SELECT id, title FROM knowledge_article ORDER BY id LIMIT 60");
+        List<Map<String, Object>> cats = jdbc.queryForList(
+                "SELECT id, name FROM ticket_category ORDER BY sort, id");
+        if (tickets.isEmpty() || articles.isEmpty() || cats.isEmpty()) {
+            return;
+        }
+
+        Random rnd = new Random(20260101L);
+        int added = 0;
+        for (int back = 29; back >= 0; back--) {
+            LocalDate day = LocalDate.now().minusDays(back);
+            LocalDateTime from = day.atStartOfDay();
+            Long existing = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM operation_log WHERE created_at >= ? AND created_at < ?",
+                    Long.class, from, from.plusDays(1));
+            int need = (4 + (back % 2)) - (existing == null ? 0 : existing.intValue());
+            for (int i = 0; i < need; i++) {
+                boolean login = rnd.nextInt(100) < 38;
+                boolean failed = rnd.nextInt(100) < 7;
+                LogTemplate tpl = login
+                        ? new LogTemplate(failed ? "LOGIN_FAILED" : "LOGIN", "USER",
+                        List.of("ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
+                        failed ? "登录失败：账号或密码错误" : "登录系统成功")
+                        : LOG_TEMPLATES.get(rnd.nextInt(LOG_TEMPLATES.size()));
+
+                Map<String, Object> op = pickOperator(byRole, tpl.roles(), users, rnd);
+                Map<String, Object> ticket = tickets.get(rnd.nextInt(tickets.size()));
+                Map<String, Object> article = articles.get(rnd.nextInt(articles.size()));
+                Map<String, Object> cat = cats.get(rnd.nextInt(cats.size()));
+                String ticketNo = String.valueOf(ticket.get("ticket_no"));
+                String agentName = String.valueOf(pickOperator(byRole, List.of("AGENT"), users, rnd).get("display_name"));
+                String userName = String.valueOf(users.get(rnd.nextInt(users.size())).get("display_name"));
+
+                String detail = tpl.detail()
+                        .replace("{ticket}", ticketNo + "「" + ticket.get("title") + "」")
+                        .replace("{article}", String.valueOf(article.get("title")))
+                        .replace("{category}", String.valueOf(cat.get("name")))
+                        .replace("{agent}", agentName)
+                        .replace("{user}", userName);
+                String targetId = switch (tpl.targetType()) {
+                    case "TICKET" -> ticketNo;
+                    case "ARTICLE" -> String.valueOf(article.get("id"));
+                    case "CATEGORY" -> String.valueOf(cat.get("name"));
+                    default -> String.valueOf(op.get("username"));
+                };
+                LocalDateTime at = day.atTime(8 + rnd.nextInt(13), rnd.nextInt(60), rnd.nextInt(60));
+                jdbc.update("INSERT INTO operation_log(operator_id,operator_name,role,action,target_type,target_id,detail,status,ip,created_at) " +
+                                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        op.get("id"), op.get("display_name"), op.get("role"), tpl.action(), tpl.targetType(),
+                        targetId, detail, "LOGIN_FAILED".equals(tpl.action()) ? "FAILED" : "SUCCESS",
+                        DEMO_IPS[rnd.nextInt(DEMO_IPS.length)], at);
+                added++;
+            }
+        }
+        if (added > 0) {
+            log.info("已补齐近 30 天操作日志演示数据 {} 条", added);
+        }
+    }
+
+    /** 从指定角色集合里随机取一个操作人，角色缺人时回落到全体用户 */
+    private Map<String, Object> pickOperator(Map<String, List<Map<String, Object>>> byRole,
+                                             List<String> roles, List<Map<String, Object>> all, Random rnd) {
+        List<Map<String, Object>> pool = new ArrayList<>();
+        for (String role : roles) {
+            List<Map<String, Object>> list = byRole.get(role);
+            if (list != null) {
+                pool.addAll(list);
+            }
+        }
+        List<Map<String, Object>> source = pool.isEmpty() ? all : pool;
+        return source.get(rnd.nextInt(source.size()));
     }
 }

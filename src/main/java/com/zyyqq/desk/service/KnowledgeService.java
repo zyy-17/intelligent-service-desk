@@ -26,14 +26,17 @@ public class KnowledgeService {
     private final RedisSupport redisSupport;
     private final AppProperties props;
     private final JdbcTemplate jdbc;
+    private final AuditService auditService;
 
     public KnowledgeService(KnowledgeArticleRepository articleRepository, KnowledgeCategoryRepository categoryRepository,
-                            RedisSupport redisSupport, AppProperties props, JdbcTemplate jdbc) {
+                            RedisSupport redisSupport, AppProperties props, JdbcTemplate jdbc,
+                            AuditService auditService) {
         this.articleRepository = articleRepository;
         this.categoryRepository = categoryRepository;
         this.redisSupport = redisSupport;
         this.props = props;
         this.jdbc = jdbc;
+        this.auditService = auditService;
     }
 
     /**
@@ -265,14 +268,27 @@ public class KnowledgeService {
         KnowledgeArticle saved = articleRepository.save(a);
         // 知识数据变更 → 主动失效相关缓存（缓存一致性管理）
         redisSupport.evictCache("hot_articles_6", "hot_articles_5", "hot_articles_10", "knowledge_categories");
+        String action = id == null
+                ? ("PUBLISHED".equals(saved.getStatus()) ? "PUBLISH_ARTICLE" : "CREATE_ARTICLE")
+                : ("PUBLISHED".equals(saved.getStatus()) ? "PUBLISH_ARTICLE" : "UPDATE_ARTICLE");
+        auditService.ok(action, "ARTICLE", String.valueOf(saved.getId()),
+                (id == null ? "新建" : "更新") + "知识文章《" + title + "》，状态 " + saved.getStatus());
         return saved;
     }
 
     /** 删除文章与其收藏记录，并失效缓存 */
     public void delete(Long id) {
+        String title = null;
+        try {
+            title = jdbc.queryForObject("SELECT title FROM knowledge_article WHERE id = ?", String.class, id);
+        } catch (Exception ignored) {
+            // 文章不存在时仍允许删除（幂等），日志里用 ID 代替标题
+        }
         jdbc.update("DELETE FROM knowledge_favorite WHERE article_id = ?", id);
         articleRepository.deleteById(id);
         redisSupport.evictCache("hot_articles_6", "hot_articles_5", "hot_articles_10", "knowledge_categories");
+        auditService.ok("DELETE_ARTICLE", "ARTICLE", String.valueOf(id),
+                "删除知识文章" + (title == null ? "" : "《" + title + "》"));
     }
 
     /** 知识库统计信息 */

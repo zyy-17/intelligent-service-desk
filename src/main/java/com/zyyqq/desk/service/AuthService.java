@@ -25,15 +25,18 @@ public class AuthService {
     private final RedisSupport redisSupport;
     private final AppProperties props;
     private final MenuService menuService;
+    private final AuditService auditService;
 
     public AuthService(UserRepository userRepository, JwtUtil jwtUtil, JdbcTemplate jdbc,
-                       RedisSupport redisSupport, AppProperties props, MenuService menuService) {
+                       RedisSupport redisSupport, AppProperties props, MenuService menuService,
+                       AuditService auditService) {
         this.userRepository = userRepository;
         this.jwtUtil = jwtUtil;
         this.jdbc = jdbc;
         this.redisSupport = redisSupport;
         this.props = props;
         this.menuService = menuService;
+        this.auditService = auditService;
     }
 
     /** 登录：校验账号密码、失败锁定、签发 JWT 并返回用户信息与角色菜单 */
@@ -42,26 +45,45 @@ public class AuthService {
         AppProperties.Redis rc = props.getRedis();
         long failures = redisSupport.recordLoginFailure(username, rc.getLoginFailWindowSeconds());
         if (failures > rc.getLoginMaxFailures()) {
+            auditFailure(username, null, "账号已临时锁定，连续失败 " + failures + " 次");
             throw new com.zyyqq.desk.common.BizException(429,
                     "登录失败次数过多，账号已临时锁定，请 " + (rc.getLoginFailWindowSeconds() / 60) + " 分钟后再试");
         }
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> BizException.unauthorized("账号或密码错误"));
+        User user = userRepository.findByUsername(username).orElse(null);
+        if (user == null) {
+            auditFailure(username, null, "账号不存在");
+            throw BizException.unauthorized("账号或密码错误");
+        }
         if (user.getStatus() != null && user.getStatus() == 0) {
+            auditFailure(username, user, "账号已被禁用");
             throw BizException.forbidden("账号已被禁用，请联系管理员");
         }
         if (!PasswordUtil.verify(password, user.getPasswordHash())) {
+            auditFailure(username, user, "密码错误");
             throw BizException.unauthorized("账号或密码错误");
         }
         redisSupport.clearLoginFailures(username);
         jdbc.update("UPDATE sys_user SET last_login_at = ? WHERE id = ?", LocalDateTime.now(), user.getId());
         String token = jwtUtil.create(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole(), user.getStatus());
+        auditService.record(user.getId(), user.getDisplayName(), user.getRole(),
+                "LOGIN", "USER", user.getUsername(), "登录成功", true);
 
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
         data.put("user", toMap(user));
         data.put("menus", menuService.menusFor(user.getRole()));
         return data;
+    }
+
+    /** 登录失败留痕：能定位到用户时带上真实姓名与角色，查无此人则只记账号 */
+    private void auditFailure(String username, User user, String reason) {
+        if (user != null) {
+            auditService.record(user.getId(), user.getDisplayName(), user.getRole(),
+                    "LOGIN_FAILED", "USER", username, "登录失败：" + reason, false);
+        } else {
+            auditService.record(null, username, null, "LOGIN_FAILED", "USER", username,
+                    "登录失败：" + reason, false);
+        }
     }
 
     /** 注册新账号（身份白名单，ADMIN 仅管理员分配） */
@@ -94,6 +116,8 @@ public class AuthService {
         User saved = userRepository.save(user);
 
         String token = jwtUtil.create(saved.getId(), saved.getUsername(), saved.getDisplayName(), saved.getRole(), saved.getStatus());
+        auditService.record(saved.getId(), saved.getDisplayName(), saved.getRole(),
+                "REGISTER", "USER", saved.getUsername(), "注册新账号（" + saved.getRole() + "）", true);
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
         data.put("user", toMap(saved));
@@ -150,6 +174,7 @@ public class AuthService {
         long uid = com.zyyqq.desk.security.AuthContext.require().id();
         jdbc.update("UPDATE sys_user SET display_name = COALESCE(?, display_name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?",
                 displayName, email, phone, uid);
+        auditService.ok("UPDATE_PROFILE", "USER", String.valueOf(uid), "修改个人资料");
         return profile();
     }
 
@@ -161,9 +186,11 @@ public class AuthService {
         }
         User user = userRepository.findById(uid).orElseThrow(() -> BizException.notFound("用户不存在"));
         if (oldPassword == null || !PasswordUtil.verify(oldPassword, user.getPasswordHash())) {
+            auditService.record("CHANGE_PASSWORD", "USER", String.valueOf(uid), "修改密码失败：原密码错误", false);
             throw new BizException("原密码错误");
         }
         jdbc.update("UPDATE sys_user SET password_hash = ? WHERE id = ?", PasswordUtil.hash(newPassword), uid);
+        auditService.ok("CHANGE_PASSWORD", "USER", String.valueOf(uid), "修改登录密码");
     }
 
     /** 用户实体转 Map（脱敏返回给前端） */
@@ -216,6 +243,7 @@ public class AuthService {
             file.transferTo(target.toFile());
             String url = "/uploads/avatar/" + filename;
             jdbc.update("UPDATE sys_user SET avatar_url = ? WHERE id = ?", url, uid);
+            auditService.ok("UPDATE_AVATAR", "USER", String.valueOf(uid), "更新头像");
             return profile();
         } catch (BizException e) {
             throw e;

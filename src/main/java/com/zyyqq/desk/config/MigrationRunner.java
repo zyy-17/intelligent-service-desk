@@ -28,6 +28,11 @@ public class MigrationRunner implements CommandLineRunner {
                 "ALTER TABLE sys_user ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL COMMENT '头像文件地址'");
         addColumnIfMissing("ticket_category", "description",
                 "ALTER TABLE ticket_category ADD COLUMN description VARCHAR(200) DEFAULT NULL COMMENT '分类说明' AFTER name");
+        // 操作日志：执行结果与操作人角色快照，支撑审计页的「执行结果 / 操作人角色」两列
+        addColumnIfMissing("operation_log", "status",
+                "ALTER TABLE operation_log ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'SUCCESS' COMMENT '执行结果 SUCCESS/FAILED' AFTER detail");
+        addColumnIfMissing("operation_log", "role",
+                "ALTER TABLE operation_log ADD COLUMN role VARCHAR(16) DEFAULT NULL COMMENT '操作人角色快照' AFTER operator_name");
     }
 
     /** 列不存在时执行 DDL 补齐 */
