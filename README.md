@@ -70,6 +70,9 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 | JWT (jjwt)      | —       | 无状态认证令牌（HS256）               |
 | PBKDF2          | —       | 密码哈希（12 万次迭代）               |
 | Spring Data Redis| —      | Redis 缓存/限流/幂等（Lettuce 连接池）|
+| Spring Cloud    | 2025.1.3 | 微服务基座（Gateway 5.x / LoadBalancer）|
+| Spring Cloud Alibaba | 2025.1.0.0 | 服务注册发现 + 配置中心 |
+| Nacos           | 3.1.1  | 注册中心 / 配置中心（虚拟机 `192.168.100.128`）|
 | Jackson 3       | —       | JSON 序列化（`tools.jackson.databind`）|
 | Lombok          | —       | 减少样板代码                          |
 
@@ -233,7 +236,7 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 ```
 intelligent-service-desk/
 │
-├── src/main/java/com/zyyqq/desk/     # ☕ Spring Boot 后端
+├── desk-core/src/main/java/com/zyyqq/desk/   # ☕ 业务单体服务（端口 8081）
 │   ├── entity/                       # 实体类（9 张表）
 │   │   ├── User.java                 # 用户（角色/头像/状态）
 │   │   ├── Ticket.java               # 工单
@@ -277,8 +280,8 @@ intelligent-service-desk/
 │       ├── DataSeeder.java           # 演示数据初始化（幂等）
 │       └── MigrationRunner.java      # 启动时自动补列
 │
-├── src/main/resources/
-│   ├── application.yml               # 主配置（数据源/Redis/AI 服务）
+├── desk-core/src/main/resources/
+│   ├── application.yml               # 主配置（数据源/Redis/AI 服务/Nacos）
 │   ├── db/schema.sql                 # 建表脚本（11 张表）
 │   └── static/                       # 前端构建产物
 │
@@ -317,7 +320,16 @@ intelligent-service-desk/
 │   ├── .env.example                  # 配置模板
 │   └── README.md                     # AI 服务说明
 │
-├── pom.xml
+├── isd-gateway/                      # 🚪 统一网关（端口 8080，客户端唯一入口）
+│   ├── pom.xml
+│   └── src/main/
+│       ├── java/com/zyyqq/gateway/
+│       │   ├── GatewayApplication.java          # 启动类
+│       │   └── filter/ClientIpFilter.java       # 透传真实客户端 IP（限流/审计依赖）
+│       └── resources/application.yml            # 路由表（lb://desk-core）
+│
+├── pom.xml                           # 📦 聚合父 POM（Boot 4.1.2 / Cloud 2025.1.3 / SCA 2025.1.0.0）
+├── application-local.yml             # 🔒 本地私密配置（Nacos 账号密码），已 gitignore
 └── README.md
 ```
 
@@ -824,6 +836,7 @@ Redis（默认 `192.168.100.128:6379` db1，可用 `REDIS_HOST/REDIS_PORT/REDIS_
 | Maven   | 3.9+     | 本项目使用 3.9.16            |
 | MySQL   | 8.0+     | 本机 3306，root 账号         |
 | Redis   | 6+       | 可选，默认 `192.168.100.128:6379` |
+| Nacos   | 3.1.1    | 注册 / 配置中心，`192.168.100.128:8848`（3.x 控制台在 `:8080`）|
 | Node.js | 20+      | 仅前端开发/构建时需要        |
 | Python  | 3.12     | 仅 AI 服务需要               |
 
@@ -838,22 +851,46 @@ username: root
 password: 123456
 ```
 
-如需修改，编辑 `src/main/resources/application.yml`，或用环境变量覆盖（`DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD`）。
+如需修改，编辑 `desk-core/src/main/resources/application.yml`，或用环境变量覆盖（`DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD`）。
 
 > 表结构（`db/schema.sql`）启动时自动执行，演示数据由 `DataSeeder` 幂等初始化：近 30 天 1286 条工单 + 最近 7 天按日补齐（每天 56~69 条）、75 篇知识文章（正文均为详细说明，发布时间与更新时间各不相同）、按浏览量 5%~11% 生成的收藏记录、用户与通知。
 
-### 第二步：启动后端
+### 第二步：准备 Nacos（必须先起）
+
+注册/配置中心部署在虚拟机 `192.168.100.128`，单机版 3.1.1：
 
 ```bash
-mvn spring-boot:run
-# 或打包运行
-mvn package -DskipTests
-java -jar target/intelligent-service-desk-0.0.1-SNAPSHOT.jar
+docker run -d --name nacos --restart=always \
+  -e MODE=standalone \
+  -e NACOS_AUTH_TOKEN="$(openssl rand -base64 32)" \
+  -e NACOS_AUTH_IDENTITY_KEY=isd-server \
+  -e NACOS_AUTH_IDENTITY_VALUE=isd-secret-2026 \
+  -p 8848:8848 -p 9848:9848 -p 9849:9849 -p 8080:8080 \
+  -v /root/nacos/data:/home/nacos/data \
+  -v /root/nacos/logs:/home/nacos/logs \
+  nacos/nacos-server:v3.1.1
 ```
 
-后端运行在 `http://localhost:8080`（内置前端，直接访问即可）。
+- `8848` = Server API 与客户端注册；**`9848`/`9849` = gRPC，不映射会注册失败**；`8080` = 3.x 独立控制台
+- 3.x **默认开启鉴权**，首次进控制台需初始化 admin 密码；把账号密码填到根目录 `application-local.yml`（该文件已 gitignore）
+- 健康检查：`curl http://192.168.100.128:8848/nacos/v3/console/health/readiness`
 
-> ⚠️ 若环境变量存在 `PORT` 或 `SERVER_PORT`/`SERVER__PORT`（如某些 IDE/工具注入），会被 Spring Boot 的 relaxed binding 映射为 `server.port` 导致端口冲突，请显式指定端口规避：`java -jar xxx.jar --server.port=8080`
+### 第三步：启动后端（两个进程）
+
+```bash
+mvn -DskipTests package
+
+# 1) 业务服务 desk-core，端口 8081（工作目录必须是项目根，否则 uploads/logs 路径会漂）
+java -jar desk-core/target/desk-core-0.0.1-SNAPSHOT.jar
+
+# 2) 网关 isd-gateway，端口 8080（客户端唯一入口）
+java -jar isd-gateway/target/isd-gateway-0.0.1-SNAPSHOT.jar
+```
+
+启动后访问 `http://localhost:8080`（网关）。`8081` 是内部端口，前端不直接访问；
+路由表在 `isd-gateway/src/main/resources/application.yml`，用 `lb://desk-core` 走注册中心，不写死 IP。
+
+> ⚠️ 若环境变量存在 `PORT` 或 `SERVER_PORT`/`SERVER__PORT`（如某些 IDE/工具注入），会被 Spring Boot 的 relaxed binding 映射为 `server.port` 导致端口冲突，请显式指定端口规避：`SERVER__PORT= SERVER_PORT= java -jar xxx.jar --server.port=8081`
 
 > 💡 **登录跳转提示**：登录成功后前端按后端下发的角色菜单跳转工作台；若登录后无法跳转，多为后端仍在运行旧代码（回退/改动后未重启），重启后端即可恢复。
 
@@ -890,13 +927,13 @@ curl -X POST "http://localhost:8080/api/admin/demo/auto-ticket?count=5" \
 
 > 该接口仅 `ADMIN` 可调用；未开启开关时返回提示而不是静默失败。
 
-### 第三步：前端（可选，开发模式）
+### 第四步：前端（可选，开发模式）
 
 ```bash
 cd frontend
 npm install
-npm run dev       # http://localhost:5173（自动代理 /api 到 8080）
-npm run build     # 构建产物输出到 src/main/resources/static
+npm run dev       # http://localhost:5173（自动代理 /api 到 8080 网关）
+npm run build     # 构建产物输出到 desk-core/src/main/resources/static
 ```
 
 ### 第四步：启动 AI 服务（可选）

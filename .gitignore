@@ -7,6 +7,7 @@ target/
 ### 参考文件（不上传到远程仓库）###
 nexusdesk.docx
 软件需求规格说明书.md
+微服务改造方案-*.md
 
 ### 前端 ###
 frontend/node_modules/

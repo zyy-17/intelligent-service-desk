@@ -1,5 +1,6 @@
 server:
-  port: 8080
+  # 8080 已让给网关（isd-gateway），本服务固定 8081
+  port: 8081
   servlet:
     encoding:
       charset: UTF-8
@@ -9,7 +10,25 @@ server:
 
 spring:
   application:
-    name: intelligent-service-desk
+    name: desk-core
+  config:
+    # 1) 本地私密配置（Nacos 账号密码），已被 .gitignore 排除；
+    # 2) Nacos 配置中心，optional 表示拉不到也能启动（用下方本地默认值兜底）
+    import:
+      - optional:file:./application-local.yml
+      - optional:nacos:desk-core.yaml
+  cloud:
+    nacos:
+      # Nacos 3.1.1 默认开启鉴权，账号密码必须给，否则注册会一直 403 重试
+      server-addr: ${NACOS_ADDR:192.168.100.128:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        namespace: ${NACOS_NAMESPACE:public}
+        group: DEFAULT_GROUP
+      config:
+        group: DEFAULT_GROUP
+        file-extension: yaml
   datasource:
     url: jdbc:mysql://localhost:3306/intelligent_service_desk?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true&rewriteBatchedStatements=true
     username: ${DB_USERNAME:root}

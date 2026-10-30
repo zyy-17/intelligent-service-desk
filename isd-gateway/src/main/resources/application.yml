@@ -1,0 +1,45 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: isd-gateway
+  cloud:
+    nacos:
+      # Nacos 3.1.1 默认开启鉴权，账号密码必须给，否则注册会一直 403 重试
+      server-addr: ${NACOS_ADDR:192.168.100.128:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        namespace: ${NACOS_NAMESPACE:public}
+        group: DEFAULT_GROUP
+    gateway:
+      # 5.x 的前缀是 gateway.server.webflux.*，旧的 spring.cloud.gateway.routes 会被静默忽略
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: 3000
+            # AI 流式接口前端最长等 120s，网关必须比它长，否则流会被中途掐断
+            response-timeout: 150s
+          routes:
+            - id: desk-core-api
+              uri: lb://desk-core
+              order: 0
+              predicates:
+                - Path=/api/**
+            # 阶段二抽出知识库服务后，在此处之前插入 Path=/api/knowledge/** 的路由即可
+            - id: desk-core-web
+              uri: lb://desk-core
+              order: 10
+              predicates:
+                - Path=/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: gateway,health
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO

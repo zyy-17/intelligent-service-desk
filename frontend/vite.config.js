@@ -17,7 +17,7 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: '../src/main/resources/static',
+    outDir: '../desk-core/src/main/resources/static',
     emptyOutDir: true
   }
 })
