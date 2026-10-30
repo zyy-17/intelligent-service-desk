@@ -17,6 +17,8 @@ public class MenuService {
             menu("/tickets", "工单管理", "Tickets", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             // 工单大厅仅客服可见：主管与管理员在「工单管理」中已能看到全站工单
             menu("/tickets/hall", "工单大厅", "Files", "AGENT"),
+            // 团队工作台：派单与超时预警，是主管的日常主界面
+            menu("/team", "团队工作台", "Monitor", "ADMIN", "SUPERVISOR"),
             menu("/customers", "客户管理", "User", "ADMIN", "SUPERVISOR"),
             menu("/knowledge", "知识库", "Collection", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),
             menu("/chat", "智能问答", "ChatDotRound", "ADMIN", "SUPERVISOR", "AGENT", "CUSTOMER"),

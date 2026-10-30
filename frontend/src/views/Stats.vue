@@ -82,6 +82,11 @@
           <el-select v-model="evalQuery.agentId" placeholder="处理客服" clearable style="width: 132px">
             <el-option v-for="a in evalAgentOptions" :key="a.id" :label="a.name" :value="a.id" />
           </el-select>
+          <el-select v-model="evalQuery.followStatus" placeholder="跟进状态" clearable style="width: 128px">
+            <el-option label="待跟进" value="PENDING" />
+            <el-option label="跟进中" value="DOING" />
+            <el-option label="已闭环" value="DONE" />
+          </el-select>
           <el-input v-model="evalQuery.keyword" placeholder="工单号 / 主题 / 客户"
                     :prefix-icon="Search" clearable style="width: 190px" @keyup.enter="searchEvals" />
           <el-button type="primary" :icon="Search" @click="searchEvals">查询</el-button>
@@ -106,6 +111,19 @@
             <span :class="{ muted: !row.comment }">{{ row.comment || '未填写评价内容' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="跟进" width="132">
+          <template #default="{ row }">
+            <template v-if="row.follow_status">
+              <el-tag :type="followTagType(row.follow_status)" size="small" effect="light">
+                {{ followLabel(row.follow_status) }}
+              </el-tag>
+              <el-button link type="primary" size="small" class="follow-btn" @click="openFollow(row)">
+                {{ row.follow_status === 'DONE' ? '改' : '跟进' }}
+              </el-button>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="评价时间" width="146" align="center">
           <template #default="{ row }">{{ fmtDate(row.rated_at) }}</template>
         </el-table-column>
@@ -121,6 +139,45 @@
                        @size-change="s => { evalPageSize = s; loadEvals(1) }" />
       </div>
     </div>
+
+    <!-- 低分评价跟进弹窗 -->
+    <el-dialog v-model="followVisible" title="低分评价跟进" width="486px">
+      <div v-if="followRow" class="follow-head">
+        <div class="follow-line">
+          <span class="follow-k">工单</span>
+          <span class="follow-v">{{ followRow.ticket_no }} · {{ followRow.title }}</span>
+        </div>
+        <div class="follow-line">
+          <span class="follow-k">客户评分</span>
+          <el-rate :model-value="followRow.rating" disabled size="small" />
+        </div>
+        <div class="follow-line">
+          <span class="follow-k">评价内容</span>
+          <span class="follow-v">{{ followRow.comment || '客户未填写评价内容' }}</span>
+        </div>
+        <div v-if="followRow.follow_by_name" class="follow-line">
+          <span class="follow-k">上次跟进</span>
+          <span class="follow-v">{{ followRow.follow_by_name }} · {{ fmtDate(followRow.follow_at) }}</span>
+        </div>
+      </div>
+      <el-form label-width="76px" style="margin-top: 6px">
+        <el-form-item label="跟进状态">
+          <el-radio-group v-model="followForm.status">
+            <el-radio-button value="PENDING">待跟进</el-radio-button>
+            <el-radio-button value="DOING">跟进中</el-radio-button>
+            <el-radio-button value="DONE">已闭环</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="跟进备注">
+          <el-input v-model="followForm.note" type="textarea" :rows="3" maxlength="500" show-word-limit
+                    placeholder="例如：已电话回访，客户接受补偿方案，问题已闭环" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="followVisible = false">取消</el-button>
+        <el-button type="primary" :loading="followSaving" @click="submitFollow">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 团队绩效看板 -->
     <div class="panel-card team-panel">
@@ -182,6 +239,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Search, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import api from '../api'
 
@@ -208,7 +266,47 @@ const evalPage = ref(1)
 const evalPageSize = ref(10)
 const loadingEvals = ref(false)
 const evalAgentOptions = ref([])
-const evalQuery = reactive({ range: null, rating: '', agentId: '', keyword: '' })
+const evalQuery = reactive({ range: null, rating: '', agentId: '', keyword: '', followStatus: '' })
+
+// 低分评价跟进
+const followVisible = ref(false)
+const followSaving = ref(false)
+const followRow = ref(null)
+const followForm = reactive({ status: 'DOING', note: '' })
+
+/** 跟进状态中文文案 */
+function followLabel(s) {
+  return { PENDING: '待跟进', DOING: '跟进中', DONE: '已闭环' }[s] || s
+}
+
+/** 跟进状态标签配色 */
+function followTagType(s) {
+  return { PENDING: 'danger', DOING: 'warning', DONE: 'success' }[s] || 'info'
+}
+
+/** 打开跟进弹窗，带出上次状态与备注 */
+function openFollow(row) {
+  followRow.value = row
+  followForm.status = row.follow_status || 'DOING'
+  followForm.note = row.follow_note || ''
+  followVisible.value = true
+}
+
+/** 保存跟进状态与备注 */
+async function submitFollow() {
+  followSaving.value = true
+  try {
+    await api.put(`/evaluations/${followRow.value.ticket_id}/follow`, {
+      status: followForm.status,
+      note: followForm.note.trim()
+    })
+    ElMessage.success('跟进状态已更新')
+    followVisible.value = false
+    await Promise.all([loadEvalStats(), loadEvalList(evalPage.value)])
+  } catch (e) { /* 拦截器已提示 */ } finally {
+    followSaving.value = false
+  }
+}
 
 /** 评价概览指标卡 */
 const evalKpi = computed(() => {
@@ -217,7 +315,8 @@ const evalKpi = computed(() => {
     { label: '评价总数', value: d.total ?? 0, color: '#6366f1' },
     { label: '平均评分', value: (d.avgRating ?? 0) + ' 分', color: '#f59e0b' },
     { label: '好评率(4星+)', value: (d.goodRate ?? 0) + '%', color: '#22c55e' },
-    { label: '评价覆盖率', value: (d.coverRate ?? 0) + '%', color: '#06b6d4' }
+    { label: '评价覆盖率', value: (d.coverRate ?? 0) + '%', color: '#06b6d4' },
+    { label: '低分待跟进', value: d.pendingFollow ?? 0, color: '#ef4444' }
   ]
 })
 
@@ -285,7 +384,8 @@ async function loadEvalList(page = 1) {
         agentId: evalQuery.agentId || undefined,
         keyword: evalQuery.keyword.trim() || undefined,
         start: start || undefined,
-        end: end || undefined
+        end: end || undefined,
+        followStatus: evalQuery.followStatus || undefined
       }
     })
     evalList.value = data.list || []
@@ -304,6 +404,7 @@ function resetEvalFilter() {
   evalQuery.rating = ''
   evalQuery.agentId = ''
   evalQuery.keyword = ''
+  evalQuery.followStatus = ''
   searchEvals()
 }
 
@@ -399,7 +500,7 @@ onBeforeUnmount(() => {
 
 /* 客户评价：四宫格指标 + 星级分布 + 客服排行 + 明细表 */
 .eval-panel { padding: 16px; }
-.eval-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.eval-kpi { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
 .eval-kpi-item {
   background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px;
   padding: 14px; text-align: center;
@@ -414,6 +515,13 @@ onBeforeUnmount(() => {
 .dist-bar i { display: block; height: 100%; border-radius: 4px; transition: width .3s; }
 .dist-num { width: 36px; text-align: right; font-size: 12px; color: var(--text-sub); flex: none; }
 .star-text { color: #f59e0b; font-weight: 600; }
+
+/* 低分评价跟进 */
+.follow-head { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.follow-line { display: flex; align-items: flex-start; gap: 10px; font-size: 12.5px; line-height: 1.7; }
+.follow-k { width: 62px; flex: none; color: var(--text-muted); }
+.follow-v { color: var(--text-main); word-break: break-all; }
+.follow-btn { margin-left: 6px; }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .toolbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 2px; }

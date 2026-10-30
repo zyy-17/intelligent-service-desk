@@ -49,15 +49,17 @@ public class AdminController {
         return ApiResponse.ok();
     }
 
-    /** 更新用户角色 */
+    /** 更新用户角色（仅管理员，主管改角色等于自行提权） */
     @PutMapping("/users/{id}/role")
+    @RequireRole({"ADMIN"})
     public ApiResponse<Void> updateRole(@PathVariable Long id, @RequestBody Map<String, String> body) {
         adminService.updateUserRole(id, body.get("role"));
         return ApiResponse.ok();
     }
 
-    /** 重置用户密码 */
+    /** 重置用户密码（仅管理员，避免主管接管他人账号） */
     @PutMapping("/users/{id}/password")
+    @RequireRole({"ADMIN"})
     public ApiResponse<Void> resetPassword(@PathVariable Long id, @RequestBody Map<String, String> body) {
         adminService.resetPassword(id, body.get("password"));
         return ApiResponse.ok();

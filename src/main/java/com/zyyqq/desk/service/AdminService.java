@@ -133,6 +133,7 @@ public class AdminService {
     public void updateUser(Long id, Map<String, Object> body) {
         AuthContext.UserInfo u = AuthContext.require();
         User user = userRepository.findById(id).orElseThrow(() -> BizException.notFound("用户不存在"));
+        assertManageable(id);
         if (body.containsKey("displayName")) {
             String displayName = text(body.get("displayName"));
             if (displayName.isEmpty()) {
@@ -167,6 +168,7 @@ public class AdminService {
                 skipped++;
                 continue;
             }
+            assertManageable(id);
             updated += jdbc.update("UPDATE sys_user SET status = ? WHERE id = ?", status, id);
         }
         audit(u, "BATCH_USER_STATUS", "USER", ids.isEmpty() ? "-" : String.valueOf(ids.get(0)),
@@ -189,8 +191,27 @@ public class AdminService {
         if (id.equals(u.id()) && status == 0) {
             throw new BizException("不能禁用自己的账号");
         }
+        assertManageable(id);
         jdbc.update("UPDATE sys_user SET status = ? WHERE id = ?", status, id);
         audit(u, "UPDATE_USER_STATUS", "USER", String.valueOf(id), "状态改为 " + status);
+    }
+
+    /**
+     * 校验当前操作人能否管理目标账号：客服主管只能管客服与客户，管理员不受限。
+     * 主管虽无「系统管理」菜单，接口仍可直达，故在服务层兜底。
+     */
+    private void assertManageable(Long targetId) {
+        if (!"SUPERVISOR".equals(AuthContext.require().role())) {
+            return;
+        }
+        List<String> roles = jdbc.queryForList("SELECT role FROM sys_user WHERE id = ?", String.class, targetId);
+        if (roles.isEmpty()) {
+            throw BizException.notFound("用户不存在");
+        }
+        String targetRole = roles.get(0);
+        if ("ADMIN".equals(targetRole) || "SUPERVISOR".equals(targetRole)) {
+            throw BizException.forbidden("客服主管只能管理客服与客户账号");
+        }
     }
 
     /** 更新用户角色 */

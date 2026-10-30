@@ -18,6 +18,7 @@ const routes = [
       // 必须排在 tickets/:id 之前，否则 hall 会被当成工单 id 匹配
       { path: 'tickets/hall', name: 'ticket-hall', component: () => import('../views/TicketsHall.vue'), meta: { title: '工单大厅' } },
       { path: 'tickets/:id', name: 'ticket-detail', component: () => import('../views/TicketDetail.vue'), meta: { title: '工单详情' } },
+      { path: 'team', name: 'team', component: () => import('../views/TeamWorkbench.vue'), meta: { title: '团队工作台' } },
       { path: 'customers', name: 'customers', component: () => import('../views/Customers.vue'), meta: { title: '客户管理' } },
       { path: 'knowledge', name: 'knowledge', component: () => import('../views/Knowledge.vue'), meta: { title: '知识库' } },
       { path: 'chat', name: 'chat', component: () => import('../views/Chat.vue'), meta: { title: '智能问答' } },

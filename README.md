@@ -124,11 +124,12 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 
 🎖️ 客服主管 SUPERVISOR
    ├─ 工作台看板        团队 KPI
-   ├─ 工单管理          分配/转派/监控
+   ├─ 团队工作台        客服负载、超时与临期预警、待分配工单行内派单
+   ├─ 工单管理          分配/转派/监控、审核接单申请
+   ├─ 客户管理          查看客户与客服账号（可启停客服/客户，不可动管理岗）
    ├─ 知识库            审核、发布
    ├─ 智能问答
-   ├─ 数据统计
-   └─ 系统管理（部分）  用户管理、分类管理
+   └─ 数据统计          含客户评价统计与低分评价跟进
 
 🧑‍💼 客服人员 AGENT
    ├─ 工作台看板        我的待办
@@ -149,6 +150,11 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
 > **数据边界**：客户端「我的工单」按 `ticket.customer_id = 当前用户` 过滤；客服端「工单管理」按
 > `ticket.assignee_id = 当前用户` 过滤（只能看到自己负责的工单，全团队视图在「工单大厅」）；
 > 主管与管理员看全站。即使手工拼接 URL 也查不到范围之外的工单。
+>
+> **角色权限边界**（防御在服务端，不只靠菜单隐藏）：
+> - 改角色、重置密码、新建用户、批量启停、手动造单：**仅 ADMIN**（否则主管可把自己提成管理员）
+> - 客服主管可启用/禁用 **客服与客户** 账号，对 ADMIN / SUPERVISOR 的写操作一律拒绝
+> - 工单分配接口对客户关闭，避免客户互相改派
 >
 > **知识库维护权限**：写接口（新增 / 编辑 / 删除）仅对 **ADMIN / SUPERVISOR** 开放，
 > 客服与客户为只读，后端 `@RequireRole` 与前端按钮可见性双重拦截。
@@ -200,8 +206,9 @@ Intelligent Service Desk 是一个面向企业的 **AI 驱动智能客服与工�
    ├─ 状态分布 / 优先级分布 / 满意度分布
    ├─ 客服工作量统计
    ├─ 工单趋势图
-   ├─ 客户评价        评分总数/平均分/好评率/覆盖率 + 星级分布 + 客服评价排行 +
-   │                  评价明细（可按星级、客服、日期、关键字筛选，分页）
+   ├─ 客户评价        评分总数/平均分/好评率/覆盖率/低分待跟进 + 星级分布 + 客服评价排行 +
+   │                  评价明细（星级·客服·日期·关键字·跟进状态筛选，分页）
+   │                  1-2 星自动进入待跟进，可标记「跟进中 / 已闭环」并留备注
    └─ 知识库表现      知识总数/总浏览/总收藏/篇均收藏 + Top 10 排行榜
 
 👤 个人中心（所有身份可从右上角头像进入）
@@ -328,7 +335,7 @@ intelligent-service-desk/
 | ---- | -------------------- | -------------- | ------------------------------------------------------------ |
 | 1    | `sys_user`           | 用户表         | id, username, password_hash, display_name, role, avatar_url, avatar_color, status |
 | 2    | `ticket_category`    | 工单分类表     | id, name, sort_order                                         |
-| 3    | `ticket`             | 工单表         | id, ticket_no, title, description, priority, status, customer_id, assignee_id, category_id |
+| 3    | `ticket`             | 工单表         | id, ticket_no, title, description, priority, status, customer_id, assignee_id, category_id, satisfaction, feedback, follow_status, follow_note（低分跟进） |
 | 4    | `ticket_message`     | 工单消息表     | id, ticket_id, sender_id, message_type(公开/内部), content   |
 | 5    | `ticket_history`     | 工单历史表     | id, ticket_id, action, operator_id, from_status, to_status   |
 | 6    | `knowledge_category` | 知识分类表     | id, name, sort_order                                         |
@@ -477,6 +484,26 @@ intelligent-service-desk/
 | GET    | `/sessions`    | 会话列表                          | ✅    |
 | GET    | `/sessions/{id}` | 加载指定会话（含历史）          | ✅    |
 | DELETE | `/sessions/{id}` | 删除会话                        | ✅    |
+
+### 团队工作台 `/api/team`（🔒 ADMIN / SUPERVISOR）
+
+| 方法 | 路径             | 说明                                                        |
+| ---- | ---------------- | ----------------------------------------------------------- |
+| GET  | `/api/team/overview` | 顶部指标（待分配/超时/临期/待审/今日新增/今日解决）+ 客服负载（在办、超时、今日分派与解决、近评均分） |
+| GET  | `/api/team/tickets?type=` | 工单队列：`unassigned` 待分配 / `overdue` 已超时 / `dueSoon` 临期，含剩余分钟数 |
+| POST | `/api/team/assign`    | 批量指派 `{ticketIds, assigneeId}`，逐单复用工单分配逻辑，单条失败不阻断 |
+
+> **超时口径**：按工单分类 `sla_hours` 算出的 `ticket.sla_resolve_at`（解决目标时间）判断，
+> 仅统计在办状态（ASSIGNED / PROCESSING / WAITING / PENDING_REVIEW）；距时限不足 4 小时视为临期。
+
+### 客户评价 `/api/evaluations`（🔒 ADMIN / SUPERVISOR）
+
+| 方法 | 路径                        | 说明                                              |
+| ---- | --------------------------- | ------------------------------------------------- |
+| GET  | `/api/evaluations`          | 评价明细（星级 / 客服 / 日期 / 关键字 / 跟进状态） |
+| GET  | `/api/evaluations/stats`    | 概览：数量、平均分、好评率、覆盖率、低分待跟进、星级分布、客服排行、趋势 |
+| GET  | `/api/evaluations/agents`   | 客服下拉                                           |
+| PUT  | `/api/evaluations/{id}/follow` | 低分跟进 `{status, note}`，状态 PENDING / DOING / DONE |
 
 ### 统计 / 搜索 / 通知
 

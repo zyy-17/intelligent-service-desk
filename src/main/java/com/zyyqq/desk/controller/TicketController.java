@@ -102,8 +102,9 @@ public class TicketController {
         return ApiResponse.ok();
     }
 
-    /** 分配/转派工单 */
+    /** 分配/转派工单（客户不可操作，避免客户互相改派） */
     @PostMapping("/{id}/assign")
+    @RequireRole({"AGENT", "ADMIN", "SUPERVISOR"})
     public ApiResponse<Void> assign(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         ticketService.assign(id, body.get("assigneeId") == null ? null : Long.valueOf(String.valueOf(body.get("assigneeId"))));
         return ApiResponse.ok();

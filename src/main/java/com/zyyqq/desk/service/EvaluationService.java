@@ -1,23 +1,28 @@
 package com.zyyqq.desk.service;
 
+import com.zyyqq.desk.common.BizException;
 import com.zyyqq.desk.common.PageResult;
+import com.zyyqq.desk.security.AuthContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 客户评价服务：评价概览统计与明细查询，供管理员/客服主管查看 */
+/** 客户评价服务：评价概览统计、明细查询与低分跟进闭环，供管理员/客服主管查看 */
 @Service
 public class EvaluationService {
 
     private final JdbcTemplate jdbc;
+    private final AuditService auditService;
 
-    public EvaluationService(JdbcTemplate jdbc) {
+    public EvaluationService(JdbcTemplate jdbc, AuditService auditService) {
         this.jdbc = jdbc;
+        this.auditService = auditService;
     }
 
     /** 评价概览：数量、平均分、好评率、评价覆盖率、星级分布、客服排行与近 30 天趋势 */
@@ -37,6 +42,12 @@ public class EvaluationService {
         m.put("distribution", distribution());
         m.put("agents", agentRanking());
         m.put("trend", trend(30));
+        // 低分跟进：1-2 星需要回访，按状态给出待办数量
+        m.put("lowTotal", count("SELECT COUNT(*) FROM ticket WHERE satisfaction IS NOT NULL AND satisfaction <= 2"));
+        m.put("pendingFollow", count("SELECT COUNT(*) FROM ticket WHERE satisfaction <= 2 " +
+                "AND COALESCE(follow_status, 'PENDING') = 'PENDING'"));
+        m.put("doingFollow", count("SELECT COUNT(*) FROM ticket WHERE satisfaction <= 2 AND follow_status = 'DOING'"));
+        m.put("doneFollow", count("SELECT COUNT(*) FROM ticket WHERE satisfaction <= 2 AND follow_status = 'DONE'"));
         return m;
     }
 
@@ -91,9 +102,10 @@ public class EvaluationService {
      * @param keyword 工单号 / 主题 / 客户名 模糊匹配
      * @param start   评价时间起（yyyy-MM-dd）
      * @param end     评价时间止（yyyy-MM-dd）
+     * @param followStatus 低分跟进状态（PENDING/DOING/DONE），为空不限
      */
     public PageResult<Map<String, Object>> list(int page, int pageSize, Integer rating, Long agentId,
-                                                String keyword, String start, String end) {
+                                                String keyword, String start, String end, String followStatus) {
         int size = Math.min(Math.max(pageSize, 1), 100);
         int p = Math.max(page, 1);
         StringBuilder where = new StringBuilder(" WHERE t.satisfaction IS NOT NULL ");
@@ -122,10 +134,16 @@ public class EvaluationService {
             where.append(" AND COALESCE(r.rated_at, t.resolved_at, t.created_at) <= ? ");
             args.add(LocalDate.parse(end).atTime(23, 59, 59));
         }
+        if (followStatus != null && !followStatus.isBlank()) {
+            // 未跟进过的低分评价按「待跟进」处理，与页面展示保持一致
+            where.append(" AND t.satisfaction <= 2 AND COALESCE(t.follow_status, 'PENDING') = ? ");
+            args.add(followStatus.trim().toUpperCase());
+        }
 
         String from = " FROM ticket t " +
                 "LEFT JOIN sys_user c ON c.id = t.customer_id " +
                 "LEFT JOIN sys_user a ON a.id = t.assignee_id " +
+                "LEFT JOIN sys_user f ON f.id = t.follow_by " +
                 "LEFT JOIN (SELECT ticket_id, MAX(created_at) AS rated_at FROM ticket_history " +
                 "           WHERE action = 'RATE' GROUP BY ticket_id) r ON r.ticket_id = t.id ";
         long total = count("SELECT COUNT(*)" + from + where, args.toArray());
@@ -138,10 +156,41 @@ public class EvaluationService {
                         "t.feedback AS comment, t.resolved_at, t.closed_at, " +
                         "c.display_name AS customer_name, c.avatar_color AS customer_avatar_color, " +
                         "a.id AS agent_id, a.display_name AS agent_name, a.avatar_color AS agent_avatar_color, " +
+                        "CASE WHEN t.satisfaction <= 2 THEN COALESCE(t.follow_status, 'PENDING') END AS follow_status, " +
+                        "t.follow_note, t.follow_at, f.display_name AS follow_by_name, " +
                         "COALESCE(r.rated_at, t.resolved_at, t.created_at) AS rated_at" +
                         from + where + " ORDER BY rated_at DESC, t.id DESC LIMIT ? OFFSET ?",
                 pageArgs.toArray());
         return PageResult.of(list, total, p, size);
+    }
+
+    /**
+     * 低分评价跟进：更新状态、备注、处理人与时间。
+     * 仅 1-2 星的低分评价需要跟进，避免把这块做成对全部评价的泛化操作。
+     *
+     * @param status PENDING 待跟进 / DOING 跟进中 / DONE 已闭环
+     */
+    public void follow(Long ticketId, String status, String note) {
+        AuthContext.UserInfo u = AuthContext.require();
+        String s = status == null ? "" : status.trim().toUpperCase();
+        if (!List.of("PENDING", "DOING", "DONE").contains(s)) {
+            throw new BizException("跟进状态不合法");
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT ticket_no, satisfaction FROM ticket WHERE id = ?", ticketId);
+        if (rows.isEmpty()) {
+            throw BizException.notFound("工单不存在");
+        }
+        Object sat = rows.get(0).get("satisfaction");
+        if (sat == null || ((Number) sat).intValue() > 2) {
+            throw new BizException("只有 1-2 星的低分评价需要跟进");
+        }
+        String text = note == null ? null : (note.length() > 500 ? note.substring(0, 500) : note);
+        jdbc.update("UPDATE ticket SET follow_status = ?, follow_note = ?, follow_by = ?, follow_at = ? WHERE id = ?",
+                s, text, u.id(), LocalDateTime.now(), ticketId);
+        String label = "PENDING".equals(s) ? "标记待跟进" : ("DOING".equals(s) ? "标记跟进中" : "标记已闭环");
+        auditService.ok("FOLLOW_EVALUATION", "TICKET", String.valueOf(rows.get(0).get("ticket_no")),
+                "低分评价" + label + (text == null || text.isBlank() ? "" : "：" + text));
     }
 
     /** 参与过处理的客服列表（评价筛选下拉用） */

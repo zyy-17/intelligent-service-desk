@@ -50,6 +50,15 @@ public class MigrationRunner implements CommandLineRunner {
                 "ALTER TABLE ai_task_log ADD COLUMN ticket_no VARCHAR(32) DEFAULT NULL COMMENT '关联工单号' AFTER user_role");
         addColumnIfMissing("ai_task_log", "answer",
                 "ALTER TABLE ai_task_log ADD COLUMN answer TEXT DEFAULT NULL COMMENT 'AI 回答正文（超长截断）' AFTER question");
+        // 低分评价跟进：1-2 星评价需要主管回访闭环，记录状态、备注、处理人与时间
+        addColumnIfMissing("ticket", "follow_status",
+                "ALTER TABLE ticket ADD COLUMN follow_status VARCHAR(16) DEFAULT NULL COMMENT '低分跟进状态 PENDING/DOING/DONE' AFTER feedback");
+        addColumnIfMissing("ticket", "follow_note",
+                "ALTER TABLE ticket ADD COLUMN follow_note VARCHAR(500) DEFAULT NULL COMMENT '跟进备注' AFTER follow_status");
+        addColumnIfMissing("ticket", "follow_by",
+                "ALTER TABLE ticket ADD COLUMN follow_by BIGINT DEFAULT NULL COMMENT '跟进处理人' AFTER follow_note");
+        addColumnIfMissing("ticket", "follow_at",
+                "ALTER TABLE ticket ADD COLUMN follow_at DATETIME DEFAULT NULL COMMENT '最近跟进时间' AFTER follow_by");
     }
 
     /** 列不存在时执行 DDL 补齐 */
