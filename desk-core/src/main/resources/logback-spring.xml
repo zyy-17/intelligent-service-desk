@@ -7,11 +7,21 @@
     <property name="FILE_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n"/>
 
+    <!--
+      控制台编码：默认 UTF-8，与文件日志保持一致。
+      Windows PowerShell 默认代码页是 936(GBK)，直接输出 UTF-8 会乱码，
+      两种解决办法（任选其一）：
+        1) 用 scripts/start-core.ps1 启动（已自动 chcp 65001 + 控制台 UTF-8）
+        2) 手动启动时加 -Dconsole.charset=GBK，让 Java 迁就 GBK 控制台
+      日志文件始终 UTF-8，不受此项影响。
+    -->
+    <property name="CONSOLE_CHARSET" value="${console.charset:-UTF-8}"/>
+
     <!-- 控制台输出 -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>${CONSOLE_PATTERN}</pattern>
-            <charset>UTF-8</charset>
+            <charset>${CONSOLE_CHARSET}</charset>
         </encoder>
     </appender>
 

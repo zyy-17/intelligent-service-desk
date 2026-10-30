@@ -877,20 +877,40 @@ docker run -d --name nacos --restart=always \
 
 ### 第三步：启动后端（两个进程）
 
+**Windows PowerShell（推荐，已解决中文日志乱码）**
+
+```powershell
+mvn -DskipTests package
+
+# 一键开两个窗口：desk-core(8081) + isd-gateway(8080)
+powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
+```
+
+`scripts/start-core.ps1` / `scripts/start-gateway.ps1` 会做三件事：把控制台切到 UTF-8（`chcp 65001` +
+`[Console]::OutputEncoding`）、把工作目录设为项目根、带端口启动 jar。
+
+**手动启动 / Linux bash**
+
 ```bash
 mvn -DskipTests package
 
 # 1) 业务服务 desk-core，端口 8081（工作目录必须是项目根，否则 uploads/logs 路径会漂）
-java -jar desk-core/target/desk-core-0.0.1-SNAPSHOT.jar
+java -jar desk-core/target/desk-core-0.0.1-SNAPSHOT.jar --server.port=8081
 
 # 2) 网关 isd-gateway，端口 8080（客户端唯一入口）
-java -jar isd-gateway/target/isd-gateway-0.0.1-SNAPSHOT.jar
+java -jar isd-gateway/target/isd-gateway-0.0.1-SNAPSHOT.jar --server.port=8080
 ```
+
+> ⚠️ **shell 语法别搞混**：`SERVER__PORT= java -jar ...` 是 bash 写法，**PowerShell 会报"无法将 SERVER__PORT= 识别为 cmdlet"**。
+> PowerShell 里清环境变量用 `Remove-Item Env:SERVER__PORT -ErrorAction SilentlyContinue`。
+> 更简单的做法是上面那样加 `--server.port=xxxx`——命令行参数优先级最高，能压过任何注入的 `PORT`/`SERVER_PORT`/`SERVER__PORT`。
+
+> ⚠️ **中文日志乱码**：Windows 控制台默认代码页 936(GBK)，而日志按 UTF-8 输出，直接 `java -jar` 会显示 `杩炴帴姝ｅ父` 之类。
+> 用 `scripts/start-*.ps1` 启动即可；或手动执行 `chcp 65001` 后再启动；也可以用 `-Dconsole.charset=GBK` 让日志迁就 GBK 控制台。
+> **日志文件（`logs/*.log`）始终是 UTF-8，不受此影响。**
 
 启动后访问 `http://localhost:8080`（网关）。`8081` 是内部端口，前端不直接访问；
 路由表在 `isd-gateway/src/main/resources/application.yml`，用 `lb://desk-core` 走注册中心，不写死 IP。
-
-> ⚠️ 若环境变量存在 `PORT` 或 `SERVER_PORT`/`SERVER__PORT`（如某些 IDE/工具注入），会被 Spring Boot 的 relaxed binding 映射为 `server.port` 导致端口冲突，请显式指定端口规避：`SERVER__PORT= SERVER_PORT= java -jar xxx.jar --server.port=8081`
 
 > 💡 **登录跳转提示**：登录成功后前端按后端下发的角色菜单跳转工作台；若登录后无法跳转，多为后端仍在运行旧代码（回退/改动后未重启），重启后端即可恢复。
 
