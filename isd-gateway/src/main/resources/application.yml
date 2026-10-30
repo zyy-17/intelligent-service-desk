@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: isd-gateway
+  config:
+    # 与 desk-core 共用同一份本地私密配置（Nacos 账号密码），已被 .gitignore 排除
+    import:
+      - optional:file:./application-local.yml
   cloud:
     nacos:
       # Nacos 3.1.1 默认开启鉴权，账号密码必须给，否则注册会一直 403 重试
